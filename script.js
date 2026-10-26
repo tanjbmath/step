@@ -573,53 +573,63 @@
     function loadTeacherAssignmentView(assignmentId) {
       document.getElementById('teacherActiveSection').classList.remove('hidden');
 
-      document.getElementById('currentAssignmentTitle').textContent = currentAssignmentData.title;
+      document.getElementById('currentAssignmentTitle').textContent = currentAssignmentData.title || 'Assignment';
       document.getElementById('currentAssignmentDesc').textContent = currentAssignmentData.description || 'No instructions provided.';
-      document.getElementById('currentSessionCode').textContent = currentAssignmentData.sessionCode;
+      document.getElementById('currentSessionCode').textContent = currentAssignmentData.sessionCode || '------';
       updateAssignmentStudentLink();
 
-      if (db) {
-        // Backfill a limited lookup record when a teacher opens an existing assignment.
-        if (signedInUser && currentAssignmentData?.sessionCode) {
-          db.collection('assignmentLookups').doc(currentAssignmentData.sessionCode).set({
-            assignmentId,
-            sessionCode: currentAssignmentData.sessionCode,
-            teacherId: signedInUser.uid,
-            title: currentAssignmentData.title || 'Assignment',
-            status: currentAssignmentData.status || 'published',
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true }).catch(err => {
-            console.warn('Could not sync session-code lookup:', err);
-          });
-        }
-        if (unsubAssignment) unsubAssignment();
-        unsubAssignment = db.collection('assignments').doc(assignmentId).onSnapshot(doc => {
-          if (!doc.exists) return;
-          currentAssignmentData = doc.data();
-          document.getElementById('currentAssignmentTitle').textContent = currentAssignmentData.title;
-          document.getElementById('currentAssignmentDesc').textContent = currentAssignmentData.description || 'No instructions provided.';
-          document.getElementById('currentSessionCode').textContent = currentAssignmentData.sessionCode;
-          updateAssignmentStudentLink();
-        }, err => console.warn("Snapshot notice:", err));
-
-        if (unsubStudents) unsubStudents();
-        unsubStudents = db.collection('assignments').doc(assignmentId).collection('students').onSnapshot(snapshot => {
-          currentJoinedStudents = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-          renderTeacherRoster();
-        }, err => {
-          console.warn("Student listener notice:", err);
-          currentJoinedStudents = [];
-          renderTeacherRoster();
-
-        });
-        if (unsubAssignedStudents) unsubAssignedStudents();
-        currentAssignedStudents = [];
-        renderTeacherRoster();
-      } else {
+      if (!db) {
         currentJoinedStudents = [];
         currentAssignedStudents = [];
         renderStudentGrid([]);
+        return;
       }
+
+      // Backfill a limited lookup record when a teacher opens an existing assignment.
+      if (signedInUser && currentAssignmentData?.sessionCode) {
+        db.collection('assignmentLookups').doc(currentAssignmentData.sessionCode).set({
+          assignmentId,
+          sessionCode: currentAssignmentData.sessionCode,
+          teacherId: signedInUser.uid,
+          title: currentAssignmentData.title || 'Assignment',
+          status: currentAssignmentData.status || 'published',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true }).catch(err => console.warn('Could not sync session-code lookup:', err));
+      }
+
+      if (unsubAssignment) unsubAssignment();
+      unsubAssignment = db.collection('assignments').doc(assignmentId).onSnapshot(doc => {
+        if (!doc.exists) return;
+        currentAssignmentData = { id: doc.id, ...doc.data() };
+        document.getElementById('currentAssignmentTitle').textContent = currentAssignmentData.title || 'Assignment';
+        document.getElementById('currentAssignmentDesc').textContent = currentAssignmentData.description || 'No instructions provided.';
+        document.getElementById('currentSessionCode').textContent = currentAssignmentData.sessionCode || '------';
+        updateAssignmentStudentLink();
+      }, err => console.warn('Assignment snapshot notice:', err));
+
+      if (unsubStudents) unsubStudents();
+      unsubStudents = db.collection('assignments').doc(assignmentId).collection('students').onSnapshot(snapshot => {
+        currentJoinedStudents = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderTeacherRoster();
+        // Keep assignment-level progress badges and the overview current after submit/review.
+        loadTeacherStudentStats();
+      }, err => {
+        console.warn('Student listener notice:', err);
+        currentJoinedStudents = [];
+        renderTeacherRoster();
+      });
+
+      if (unsubAssignedStudents) unsubAssignedStudents();
+      currentAssignedStudents = [];
+      // Listen to assignment-targeted records as well; submission/review updates these records.
+      unsubAssignedStudents = db.collection('assignments').doc(assignmentId).collection('assignedStudents').onSnapshot(snapshot => {
+        currentAssignedStudents = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderTeacherRoster();
+      }, err => {
+        console.warn('Assigned-student listener notice:', err);
+        currentAssignedStudents = [];
+        renderTeacherRoster();
+      });
     }
 
     document.getElementById('deleteTeacherAssignmentBtn').addEventListener('click', () => {
@@ -840,7 +850,9 @@
         const joined = joinedByEmail.get(email);
         assignedEmails.add(email);
         roster.push({ ...assigned, ...joined, id: joined ? joined.id : assigned.id, studentUid: joined ? joined.id : null,
-          studentEmail: email, assignedStudentKey: assigned.id, status: assigned.status || (joined ? 'in-progress' : 'assignment-started'), isJoined: Boolean(joined) });
+          studentEmail: email, assignedStudentKey: assigned.id,
+          // When a student has joined, their live record is authoritative for submitted/completed status.
+          status: joined?.status || assigned.status || 'assignment-started', isJoined: Boolean(joined) });
       });
       currentJoinedStudents.forEach(student => {
         const email = (student.email || '').toLowerCase();
@@ -1244,6 +1256,7 @@
     function setupSlideWorkspace() {
       undoStack = [];
       redoStack = [];
+      syncDrawingPreferencesToControls();
       updateHistoryButtons();
       updateSlideNavigationUI();
       resizeCanvas();
@@ -1540,8 +1553,18 @@
     toolEraser.addEventListener('click', () => setTool('eraser'));
     toolText.addEventListener('click', () => setTool('text'));
 
-    colorPicker.addEventListener('input', (e) => currentColor = e.target.value);
-    brushSize.addEventListener('input', (e) => currentLineWidth = e.target.value);
+    colorPicker.addEventListener('input', (e) => {
+      currentColor = e.target.value;
+    });
+    brushSize.addEventListener('input', (e) => {
+      currentLineWidth = Number(e.target.value);
+    });
+
+    // Retain drawing preferences when opening another student's work or changing slides.
+    function syncDrawingPreferencesToControls() {
+      colorPicker.value = currentColor;
+      brushSize.value = String(currentLineWidth);
+    }
 
     // Toggle between Stylus Only (Palm Rejection) and Hand/Touch Mode
     inputModeBtn.addEventListener('click', () => {
@@ -1805,6 +1828,10 @@
       isDrawing = true;
       lastX = coords.x;
       lastY = coords.y;
+      ctx.strokeStyle = activeTool === 'eraser' ? '#ffffff' : currentColor;
+      ctx.lineWidth = activeTool === 'eraser' ? (Number(currentLineWidth) * 4) / canvasZoom : Number(currentLineWidth) / canvasZoom;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       mainCanvas.setPointerCapture(e.pointerId);
     }
 
