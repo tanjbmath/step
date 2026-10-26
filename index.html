@@ -257,6 +257,7 @@
             </button>
           </div>
 
+          <!-- Pen, eraser and text -->
           <div class="toolbar-group flex bg-slate-100 p-1 rounded-lg gap-1 border border-slate-200">
             <button id="toolPen" title="Pen Tool" class="tool-btn bg-indigo-600 text-white px-3 py-1.5 rounded text-sm transition">
               <i class="fa-solid fa-pen"></i>
@@ -269,31 +270,30 @@
             </button>
           </div>
 
-          <div class="toolbar-group flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200" aria-label="Canvas zoom controls">
-            <button id="canvasZoomOutBtn" type="button" title="Zoom out" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-200 text-slate-700 text-sm"><i class="fa-solid fa-minus"></i></button>
-            <span id="canvasZoomLabel" class="text-xs font-semibold text-slate-600 min-w-12 text-center">100%</span>
-            <button id="canvasZoomInBtn" type="button" title="Zoom in" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-200 text-slate-700 text-sm"><i class="fa-solid fa-plus"></i></button>
-            <button id="canvasZoomResetBtn" type="button" title="Reset zoom" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-200 text-slate-700 text-xs">Reset</button>
-          </div>
-                    <button id="canvasFullscreenBtn" type="button" title="Expand workspace to full screen" aria-pressed="false" class="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition"><i class="fa-solid fa-expand"></i> Full screen</button>
-
-          <!-- Color Picker -->
+          <!-- Colour -->
           <div class="toolbar-group flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
             <label for="colorPicker" class="text-xs text-slate-500 font-medium">Color</label>
             <input type="color" id="colorPicker" value="#1e293b" class="w-7 h-7 rounded border-0 cursor-pointer bg-transparent">
           </div>
 
-          <!-- Line Thickness Slider -->
+          <!-- Pen / eraser size -->
           <div class="toolbar-group flex items-center gap-2 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200">
             <label for="brushSize" class="text-xs text-slate-500 font-medium">Size</label>
             <input type="range" id="brushSize" min="2" max="30" value="4" class="w-16 accent-indigo-600 cursor-pointer">
           </div>
 
+          <!-- Undo / redo: icon only -->
           <div class="flex items-center gap-1">
-            <button id="undoCanvasBtn" type="button" title="Undo last writing action" disabled class="bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-sm font-medium transition"><i class="fa-solid fa-rotate-left"></i> Undo</button>
-            <button id="redoCanvasBtn" type="button" title="Redo last undone action" disabled class="bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-sm font-medium transition"><i class="fa-solid fa-rotate-right"></i> Redo</button>
+            <button id="undoCanvasBtn" type="button" title="Undo last writing action" aria-label="Undo" disabled class="bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 border border-slate-200 p-2 rounded-lg text-sm font-medium transition"><i class="fa-solid fa-rotate-left"></i></button>
+            <button id="redoCanvasBtn" type="button" title="Redo last undone action" aria-label="Redo" disabled class="bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 border border-slate-200 p-2 rounded-lg text-sm font-medium transition"><i class="fa-solid fa-rotate-right"></i></button>
           </div>
-          <!-- Add an image either from the camera or the device gallery -->
+
+          <!-- Clear canvas -->
+          <button id="clearCanvasBtn" title="Clear canvas" class="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
+            <i class="fa-solid fa-trash-can"></i> Clear
+          </button>
+
+          <!-- Camera and gallery -->
           <button id="capturePhotoBtn" type="button" title="Take a photo and add it to this slide" class="bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
             <i class="fa-solid fa-camera"></i> Camera
           </button>
@@ -302,10 +302,17 @@
           </button>
           <input id="capturePhotoInput" type="file" accept="image/*" capture="environment" class="hidden" aria-label="Take a photo to add to the assignment">
           <input id="chooseImageInput" type="file" accept="image/*" class="hidden" aria-label="Choose an image from the device gallery">
-          <!-- Clear Canvas -->
-          <button id="clearCanvasBtn" class="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-lg text-sm font-medium transition">
-            <i class="fa-solid fa-trash-can"></i> Clear
-          </button>
+
+          <!-- Canvas resize / zoom -->
+          <div class="toolbar-group flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200" aria-label="Canvas zoom controls">
+            <button id="canvasZoomOutBtn" type="button" title="Zoom out" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-200 text-slate-700 text-sm"><i class="fa-solid fa-minus"></i></button>
+            <span id="canvasZoomLabel" class="text-xs font-semibold text-slate-600 min-w-12 text-center">100%</span>
+            <button id="canvasZoomInBtn" type="button" title="Zoom in" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-200 text-slate-700 text-sm"><i class="fa-solid fa-plus"></i></button>
+            <button id="canvasZoomResetBtn" type="button" title="Reset zoom" class="px-2.5 py-1.5 rounded bg-white hover:bg-slate-200 text-slate-700 text-xs">Reset</button>
+          </div>
+
+          <!-- Fullscreen is the final toolbar control -->
+          <button id="canvasFullscreenBtn" type="button" title="Expand workspace to full screen" aria-pressed="false" class="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition"><i class="fa-solid fa-expand"></i> Full screen</button>
         </div>
 
       </div>
