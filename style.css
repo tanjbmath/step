@@ -16,6 +16,21 @@
       touch-action: none;
       max-width: none;
     }
+    .eraser-cursor {
+      position: absolute;
+      z-index: 5;
+      left: 0;
+      top: 0;
+      width: 24px;
+      height: 24px;
+      border: 1.5px solid #0f172a;
+      border-radius: 50%;
+      background: rgba(148, 163, 184, 0.18);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    .eraser-cursor.hidden { display: none; }
 
     /* Compact, single-line controls and a larger writing area on phones. */
     #drawingToolbar {
