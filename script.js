@@ -920,6 +920,7 @@ async function loadAssignmentProgressCounts(assignment) {
           <div class="flex flex-wrap gap-2">
             ${student.isJoined ? '<button type="button" class="inspect-student-btn flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">View work</button>' : ''}
             ${student.status === 'submitted' ? '<button type="button" class="mark-completed-btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">Completed</button><button type="button" class="amendments-btn bg-amber-500 hover:bg-amber-600 text-white text-xs px-3 py-2 rounded-lg font-semibold">Amendments Needed</button>' : ''}
+            ${student.isJoined && ['assignment-started', 'in-progress'].includes(String(student.status || '').trim().toLowerCase()) ? '<button type="button" class="force-completed-btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">Complete Assignment</button>' : ''}
           </div>`;
         const inspect = card.querySelector('.inspect-student-btn');
         if (inspect) inspect.addEventListener('click', e => { e.stopPropagation(); openWorkspaceForInspection(student.studentUid || student.id, displayName, student.status, student); });
@@ -927,6 +928,14 @@ async function loadAssignmentProgressCounts(assignment) {
         if (completed) completed.addEventListener('click', e => { e.stopPropagation(); setStudentReviewStatus(student, 'completed'); });
         const amendments = card.querySelector('.amendments-btn');
         if (amendments) amendments.addEventListener('click', e => { e.stopPropagation(); setStudentReviewStatus(student, 'in-progress'); });
+        const forceCompleted = card.querySelector('.force-completed-btn');
+        if (forceCompleted) forceCompleted.addEventListener('click', async e => {
+          e.stopPropagation();
+          if (!window.confirm('Mark ' + displayName + '\'s assignment as Completed without student submission?')) return;
+          forceCompleted.disabled = true;
+          try { await setStudentReviewStatus(student, 'completed'); }
+          finally { forceCompleted.disabled = false; }
+        });
         if (student.isJoined && db) {
           db.collection('assignments').doc(currentAssignmentId).collection('students').doc(student.studentUid || student.id)
             .collection('slides').doc('slide_0').onSnapshot(slideDoc => {
@@ -939,18 +948,21 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     async function setStudentReviewStatus(student, status) {
-      if (!currentAssignmentId || !signedInUser) return;
+      if (!currentAssignmentId || !signedInUser || !db) return;
       try {
         const update = { status, reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
           reviewOutcome: status === 'completed' ? 'completed' : 'amendments-needed' };
+        const writes = [];
         if (student.assignedStudentKey) {
-          await db.collection('assignments').doc(currentAssignmentId).collection('assignedStudents').doc(student.assignedStudentKey).update(update);
+          writes.push(db.collection('assignments').doc(currentAssignmentId).collection('assignedStudents').doc(student.assignedStudentKey).set(update, { merge: true }));
         }
         if (student.studentUid) {
-          await db.collection('users').doc(student.studentUid).collection('submissions').doc(currentAssignmentId).set(update, { merge: true });
-          await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(student.studentUid).set(update, { merge: true });
+          writes.push(db.collection('users').doc(student.studentUid).collection('submissions').doc(currentAssignmentId).set(update, { merge: true }));
+          writes.push(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(student.studentUid).set(update, { merge: true }));
         }
-        showToast(status === 'completed' ? 'Work marked completed.' : 'Amendments requested. Student can continue editing.', 'success');
+        if (!writes.length) throw new Error('Could not identify the student records to update.');
+        await Promise.all(writes);
+        showToast(status === 'completed' ? 'Assignment marked completed by teacher.' : 'Amendments requested. Student can continue editing.', 'success');
       } catch (err) {
         console.error('Could not update review status:', err);
         showToast('Could not update review status: ' + err.message, 'error');
