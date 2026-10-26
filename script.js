@@ -1585,6 +1585,12 @@ async function loadAssignmentProgressCounts(assignment) {
     });
     brushSize.addEventListener('input', (e) => {
       currentLineWidth = Number(e.target.value);
+      if (eraserCursor && !eraserCursor.classList.contains('hidden')) {
+        const canvasScale = mainCanvas.width ? mainCanvas.clientWidth / mainCanvas.width : 1;
+        const diameter = Math.max(4, Number(currentLineWidth) * 4 * canvasScale);
+        eraserCursor.style.width = `${diameter}px`;
+        eraserCursor.style.height = `${diameter}px`;
+      }
     });
 
     // Retain drawing preferences when opening another student's work or changing slides.
@@ -1609,8 +1615,26 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     });
 
+    const eraserCursor = document.getElementById('eraserCursor');
+
+    function updateEraserCursor(e) {
+      if (!eraserCursor || activeTool !== 'eraser') return;
+      const rect = canvasWrapper.getBoundingClientRect();
+      eraserCursor.style.left = `${e.clientX - rect.left}px`;
+      eraserCursor.style.top = `${e.clientY - rect.top}px`;
+      const canvasScale = mainCanvas.width ? mainCanvas.clientWidth / mainCanvas.width : 1;
+      const diameter = Math.max(4, Number(currentLineWidth) * 4 * canvasScale);
+      eraserCursor.style.width = `${diameter}px`;
+      eraserCursor.style.height = `${diameter}px`;
+      eraserCursor.classList.remove('hidden');
+    }
+
+    canvasWrapper.addEventListener('pointermove', updateEraserCursor);
+    canvasWrapper.addEventListener('pointerleave', () => eraserCursor?.classList.add('hidden'));
+
     function setTool(tool) {
       activeTool = tool;
+      if (eraserCursor) eraserCursor.classList.toggle('hidden', tool !== 'eraser');
       [toolPen, toolEraser, toolText].forEach(btn => {
         btn.classList.remove('bg-indigo-600', 'text-white');
         btn.classList.add('bg-white', 'text-slate-700', 'hover:bg-slate-200');
