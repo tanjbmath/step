@@ -691,21 +691,36 @@
       }
     }
 
-    async function loadTeacherStudentStats() {
+        async function loadTeacherStudentStats() {
       const body = document.getElementById('teacherStudentStatsBody');
       if (!body || !signedInUser || !db) return;
       try {
         const assignments = await db.collection('assignments').where('teacherId', '==', signedInUser.uid).get();
         const students = new Map();
         for (const assignment of assignments.docs) {
-          const roster = await assignment.ref.collection('students').get();
-          roster.docs.forEach(doc => {
+          const [rosterSnapshot, assignedSnapshot] = await Promise.all([
+            assignment.ref.collection('students').get(),
+            assignment.ref.collection('assignedStudents').get()
+          ]);
+          const byIdentity = new Map();
+          rosterSnapshot.docs.forEach(doc => {
             const data = doc.data();
-            const id = doc.id;
+            byIdentity.set(String(data.email || data.studentEmail || doc.id).trim().toLowerCase(), { ...data, uid: doc.id });
+          });
+          assignedSnapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const identity = String(data.studentEmail || data.email || data.studentUid || doc.id).trim().toLowerCase();
+            const joined = byIdentity.get(identity);
+            byIdentity.set(identity, { ...data, ...joined, status: joined?.status || data.status || 'assignment-started',
+              teacherRemark: joined?.teacherRemark || data.teacherRemark, uid: joined?.uid || data.studentUid || doc.id });
+          });
+          byIdentity.forEach(data => {
+            const id = data.uid;
+            if (!id) return;
             if (!students.has(id)) students.set(id, { id, name: data.name || 'Student', counts: { started: 0, progress: 0, submitted: 0, completed: 0 }, remarks: {} });
             const entry = students.get(id);
             entry.name = data.name || entry.name;
-            const status = data.status || 'in-progress';
+            const status = String(data.status || 'in-progress').trim().toLowerCase();
             if (status === 'assignment-started') entry.counts.started++;
             else if (status === 'submitted') entry.counts.submitted++;
             else if (status === 'completed') entry.counts.completed++;
@@ -746,7 +761,7 @@
       }
     }
 
-    async function loadAssignmentProgressCounts(assignment) {
+async function loadAssignmentProgressCounts(assignment) {
       const assignmentRef = db.collection('assignments').doc(assignment.id);
       const [assignedSnapshot, joinedSnapshot] = await Promise.all([
         assignmentRef.collection('assignedStudents').get(),
