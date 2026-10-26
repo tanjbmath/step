@@ -107,4 +107,47 @@
         aspect-ratio: 4 / 3;
       }
     }
-  
+
+/* Teacher tablet layout: keep roster cards and their action rows within the
+   normal document flow so bottom-row buttons remain reachable by scrolling. */
+#teacherDashboard,
+#teacherActiveSection,
+#studentsGrid,
+#studentsGrid > * {
+  min-width: 0;
+}
+#teacherActiveSection {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+#studentsGrid > * {
+  min-height: 0;
+}
+#studentsGrid .flex.flex-col {
+  height: auto;
+}
+#studentsGrid .flex.flex-wrap {
+  align-items: stretch;
+}
+#studentsGrid button {
+  max-width: 100%;
+  white-space: normal;
+}
+@media (max-width: 1024px) {
+  #teacherDashboard {
+    overflow: visible;
+  }
+  #teacherAssignmentsPanel,
+  #teacherActiveSection,
+  #teacherActiveSection > div {
+    max-height: none;
+  }
+  #studentsGrid {
+    grid-auto-rows: auto;
+    align-items: stretch;
+  }
+  #studentsGrid > div {
+    min-height: fit-content;
+  }
+}
