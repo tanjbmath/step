@@ -196,6 +196,7 @@
     let ownedHelpRequestListeners = [];
     let unsubTeacherHelpRequests = null;
     let unsubActiveHelpSession = null;
+    let peerHelpListeningAssignmentId = null;
     const copiedHelpResults = new Set();
     const PEER_HELP_COLOUR = '#e11d48';
 
@@ -1465,6 +1466,10 @@ async function loadAssignmentProgressCounts(assignment) {
         activeHelpMode = null;
         updatePeerHelpControls();
       }
+      if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
+      if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
+      ownedHelpRequestListeners.forEach(unsub => unsub());
+      ownedHelpRequestListeners = [];
       workspaceScreen.classList.add('hidden');
       if (inspectingStudentId) {
         teacherDashboard.classList.remove('hidden');
@@ -2357,6 +2362,10 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function startPeerHelpListeners() {
       if (!db || !signedInUser || !currentAssignmentId) return;
+      if (peerHelpListeningAssignmentId !== currentAssignmentId) {
+        requesterHelpLock = false;
+        peerHelpListeningAssignmentId = currentAssignmentId;
+      }
       if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
       if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
       ownedHelpRequestListeners.forEach(unsub => unsub());
