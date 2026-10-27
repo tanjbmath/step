@@ -17,6 +17,8 @@
     let auth = null;
     let isFirebaseReady = false;
     let signedInUser = null;
+    // Canonical student name stored once per authenticated account.
+    let studentProfileName = '';
     let accountRole = 'student';
     let historyUnsubscribe = null;
     let assignedHistoryUnsubscribe = null;
@@ -63,7 +65,15 @@
               lastSignInAt: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
             const profile = await userRef.get();
-            accountRole = profile.exists && profile.data().role === 'teacher' ? 'teacher' : 'student';
+            const profileData = profile.exists ? profile.data() : {};
+            studentProfileName = typeof profileData.studentName === 'string' ? profileData.studentName.trim() : '';
+            const nameInput = document.getElementById('studentNameInput');
+            if (nameInput) {
+              nameInput.value = studentProfileName || user.displayName || (user.email || 'Student').split('@')[0];
+              nameInput.readOnly = Boolean(studentProfileName);
+              nameInput.title = studentProfileName ? 'This name is saved to your account and is used for every assignment.' : 'Choose your name the first time you join an assignment. It will be saved for future assignments.';
+            }
+            accountRole = profileData.role === 'teacher' ? 'teacher' : 'student';
           } catch (err) {
             console.warn('Profile/role lookup notice:', err);
             showToast('Could not verify your account role. Student access remains available.', 'info');
@@ -997,7 +1007,7 @@ async function loadAssignmentProgressCounts(assignment) {
       e.preventDefault();
 
       const inputCode = document.getElementById('joinCodeInput').value.trim().toUpperCase();
-      const name = document.getElementById('studentNameInput').value.trim();
+      let name = document.getElementById('studentNameInput').value.trim();
       const joinBtn = document.getElementById('joinBtn');
 
       if (!signedInUser) {
@@ -1032,6 +1042,25 @@ async function loadAssignmentProgressCounts(assignment) {
         if (!matchedDocId) throw new Error('This session code is not configured correctly.');
 
         const now = firebase.firestore.FieldValue.serverTimestamp();
+
+        // Atomically set the student's name only if this account has not chosen one before.
+        // Existing names always win, so one Google account cannot use different names across assignments.
+        const userRef = db.collection('users').doc(signedInUser.uid);
+        const canonicalName = await db.runTransaction(async transaction => {
+          const userSnapshot = await transaction.get(userRef);
+          const profileData = userSnapshot.exists ? userSnapshot.data() : {};
+          const savedName = typeof profileData.studentName === 'string' ? profileData.studentName.trim() : '';
+          if (savedName) return savedName;
+          transaction.set(userRef, { studentName: name, studentNameSetAt: now }, { merge: true });
+          return name;
+        });
+        name = canonicalName;
+        studentProfileName = canonicalName;
+        studentName = canonicalName;
+        const canonicalNameInput = document.getElementById('studentNameInput');
+        canonicalNameInput.value = canonicalName;
+        canonicalNameInput.readOnly = true;
+        canonicalNameInput.title = 'This name is saved to your account and is used for every assignment.';
 
         // Firestore rules validate that the code maps to this assignment before membership is created.
         await db.collection('assignments').doc(matchedDocId)
@@ -1167,7 +1196,8 @@ async function loadAssignmentProgressCounts(assignment) {
     function startAssignedAssignment(item) {
       if (!item.sessionCode) return showToast('This assignment has no session code. Ask your teacher for help.', 'error');
       document.getElementById('joinCodeInput').value = item.sessionCode;
-      document.getElementById('studentNameInput').value = signedInUser.displayName || (signedInUser.email || 'Student').split('@')[0];
+      document.getElementById('studentNameInput').value = studentProfileName || signedInUser.displayName || (signedInUser.email || 'Student').split('@')[0];
+      document.getElementById('studentNameInput').readOnly = Boolean(studentProfileName);
       studentHistoryScreen.classList.add('hidden');
       studentJoinScreen.classList.remove('hidden');
       document.getElementById('studentJoinForm').requestSubmit();
@@ -1240,7 +1270,7 @@ async function loadAssignmentProgressCounts(assignment) {
         currentAssignmentId = assignmentId;
         currentSessionCode = currentAssignmentData.sessionCode || submission.sessionCode || '';
         studentId = signedInUser.uid;
-        studentName = signedInUser.displayName || 'Student';
+        studentName = studentProfileName || signedInUser.displayName || 'Student';
         inspectingStudentId = null;
         currentSubmissionStatus = submission.status || 'in-progress';
         currentAssignedStudentKey = submission.assignedStudentKey || null;
