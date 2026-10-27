@@ -74,11 +74,25 @@
               nameInput.title = studentProfileName ? 'This name is saved to your account and is used for every assignment.' : 'Choose your name the first time you join an assignment. It will be saved for future assignments.';
             }
             accountRole = profileData.role === 'teacher' ? 'teacher' : 'student';
-            if (accountRole === 'student' && studentProfileName) {
-              await db.collection('peerDirectory').doc(user.uid).set({
-                studentName: studentProfileName,
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-              }, { merge: true });
+            if (accountRole === 'student') {
+              const directoryName = studentProfileName
+                || (typeof user.displayName === 'string' ? user.displayName.trim() : '');
+              if (directoryName) {
+                const peerRef = db.collection('peerDirectory').doc(user.uid);
+                const peerSnapshot = await peerRef.get();
+                const peerData = peerSnapshot.exists ? peerSnapshot.data() : {};
+                // Google display name makes signed-in students discoverable before their first assignment.
+                // A chosen canonical name takes precedence and remains fixed afterwards.
+                if (!peerSnapshot.exists
+                    || peerData.nameSource !== 'chosen'
+                    || (studentProfileName && peerData.studentName !== studentProfileName)) {
+                  await peerRef.set({
+                    studentName: directoryName,
+                    nameSource: studentProfileName ? 'chosen' : (peerData.nameSource || 'profile'),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                  }, { merge: true });
+                }
+              }
             }
           } catch (err) {
             console.warn('Profile/role lookup notice:', err);
@@ -1145,6 +1159,7 @@ async function loadAssignmentProgressCounts(assignment) {
           // The directory stores only the student's chosen display name, not email or other profile data.
           transaction.set(peerRef, {
             studentName: chosenName,
+            nameSource: 'chosen',
             updatedAt: now
           }, { merge: true });
           return chosenName;
