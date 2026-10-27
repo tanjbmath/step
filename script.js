@@ -1456,6 +1456,15 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     document.getElementById('exitWorkspaceBtn').addEventListener('click', () => {
+      // Leaving an active help session does not cancel it. The teacher can submit the
+      // last saved annotations or release the lock from the monitor.
+      if (activeHelpMode === 'helper') {
+        if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
+        activeHelpRequestId = null;
+        activeHelpRequestData = null;
+        activeHelpMode = null;
+        updatePeerHelpControls();
+      }
       workspaceScreen.classList.add('hidden');
       if (inspectingStudentId) {
         teacherDashboard.classList.remove('hidden');
