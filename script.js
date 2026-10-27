@@ -2161,7 +2161,11 @@ async function loadAssignmentProgressCounts(assignment) {
         try {
           mainCanvas.releasePointerCapture(e.pointerId);
         } catch (err) {}
-        saveCanvasToFirestore();
+        if (activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
+          saveActiveHelpCanvasNow().catch(err => console.warn('Immediate Peer Help save failed:', err));
+        } else {
+          saveCanvasToFirestore();
+        }
       }
     }
 
@@ -2187,6 +2191,10 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function peerHelpOwnerRef(requestId) {
       return db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners').doc(requestId);
+    }
+
+    function peerHelpLockRef(workKey) {
+      return db.collection('assignments').doc(currentAssignmentId).collection('helpLocks').doc(workKey);
     }
 
     function exportCanvasJpeg() {
@@ -2428,6 +2436,7 @@ async function loadAssignmentProgressCounts(assignment) {
       try {
         const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
         const requestRef = requestsRef.doc();
+        const workKey = `wk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         const now = firebase.firestore.FieldValue.serverTimestamp();
         const batch = db.batch();
         batch.set(requestRef, {
@@ -2435,7 +2444,7 @@ async function loadAssignmentProgressCounts(assignment) {
           question: question.trim(),
           status: 'pending',
           slideIndex: currentSlideIndex,
-          workKey: `wk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+          workKey,
           helperUid: null,
           createdAt: now,
           updatedAt: now
@@ -2448,6 +2457,10 @@ async function loadAssignmentProgressCounts(assignment) {
           canvasData: exportCanvasJpeg(),
           updatedAt: now
         });
+        batch.set(peerHelpLockRef(workKey), { requestId: requestRef.id, workKey, status: 'pending', createdAt: now, updatedAt: now });
+        batch.set(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid), {
+          activeHelpLockKey: workKey
+        }, { merge: true });
         await batch.commit();
         document.getElementById('askForHelpModal').classList.add('hidden');
         document.getElementById('askForHelpForm').reset();
@@ -2468,12 +2481,17 @@ async function loadAssignmentProgressCounts(assignment) {
         await db.runTransaction(async transaction => {
           const doc = await transaction.get(ref);
           if (!doc.exists || doc.data().status !== 'pending') throw new Error('This request has already been claimed.');
+          const lockRef = peerHelpLockRef(doc.data().workKey);
+          const lockDoc = await transaction.get(lockRef);
+          if (!lockDoc.exists || lockDoc.data().status !== 'pending') throw new Error('This request is no longer available.');
+          const now = firebase.firestore.FieldValue.serverTimestamp();
           transaction.update(ref, {
             status: 'helping',
             helperUid: signedInUser.uid,
-            claimedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            claimedAt: now,
+            updatedAt: now
           });
+          transaction.update(lockRef, { status: 'helping', helperUid: signedInUser.uid, updatedAt: now });
         });
         const snapshot = await ref.get();
         activeHelpRequestId = requestId;
@@ -2513,6 +2531,9 @@ async function loadAssignmentProgressCounts(assignment) {
           await db.runTransaction(async transaction => {
             const doc = await transaction.get(ref);
             if (!doc.exists || doc.data().status !== 'helping') throw new Error('This help session is no longer active.');
+            const lockRef = peerHelpLockRef(doc.data().workKey);
+            const lockDoc = await transaction.get(lockRef);
+            if (!lockDoc.exists || lockDoc.data().status !== 'helping') throw new Error('The session lock is no longer active.');
             transaction.update(ref, {
               status: 'submitted',
               submittedAt: now,
@@ -2520,6 +2541,7 @@ async function loadAssignmentProgressCounts(assignment) {
               teacherSubmittedBy: signedInUser.uid,
               teacherSubmittedAt: now
             });
+            transaction.update(lockRef, { status: 'submitted', updatedAt: now });
           });
         } else {
           await db.runTransaction(async transaction => {
@@ -2527,7 +2549,11 @@ async function loadAssignmentProgressCounts(assignment) {
             if (!doc.exists || doc.data().status !== 'helping' || doc.data().helperUid !== signedInUser.uid) {
               throw new Error('You are no longer the assigned helper for this request.');
             }
+            const lockRef = peerHelpLockRef(doc.data().workKey);
+            const lockDoc = await transaction.get(lockRef);
+            if (!lockDoc.exists || lockDoc.data().status !== 'helping') throw new Error('The session lock is no longer active.');
             transaction.update(ref, { status: 'submitted', submittedAt: now, updatedAt: now });
+            transaction.update(lockRef, { status: 'submitted', updatedAt: now });
           });
         }
         if (!asTeacher) {
@@ -2567,10 +2593,15 @@ async function loadAssignmentProgressCounts(assignment) {
       if (!signedInUser || currentUserRole !== 'teacher') return;
       if (!confirm('Expire this help request? The requester will be able to continue working.')) return;
       try {
-        await peerHelpRequestRef(requestId).update({
-          status: 'expired',
-          expiredAt: firebase.firestore.FieldValue.serverTimestamp(),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        const ref = peerHelpRequestRef(requestId);
+        await db.runTransaction(async transaction => {
+          const doc = await transaction.get(ref);
+          if (!doc.exists || !['pending', 'helping'].includes(doc.data().status)) throw new Error('This request is no longer active.');
+          const lockRef = peerHelpLockRef(doc.data().workKey);
+          const lockDoc = await transaction.get(lockRef);
+          const now = firebase.firestore.FieldValue.serverTimestamp();
+          transaction.update(ref, { status: 'expired', expiredAt: now, updatedAt: now });
+          if (lockDoc.exists) transaction.update(lockRef, { status: 'expired', updatedAt: now });
         });
         showToast('Peer Help request expired.', 'success');
       } catch (err) {
