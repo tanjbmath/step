@@ -85,18 +85,30 @@ service cloud.firestore {
       allow read: if signedIn();
 
       allow create: if isOwner(uid)
-        && request.resource.data.keys().hasOnly(['studentName', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['studentName', 'nameSource', 'updatedAt'])
         && request.resource.data.studentName is string
         && request.resource.data.studentName.size() > 0
-        && request.resource.data.studentName.size() <= 80;
+        && request.resource.data.studentName.size() <= 80
+        && request.resource.data.nameSource in ['profile', 'chosen'];
 
-      // A chosen name is immutable from the client; only its timestamp may be refreshed.
+      // A Google display name may be replaced by the student's chosen canonical name once.
+      // After that, the chosen name and source cannot be changed by client updates.
       allow update: if isOwner(uid)
-        && request.resource.data.keys().hasOnly(['studentName', 'updatedAt'])
-        && request.resource.data.studentName == resource.data.studentName
+        && request.resource.data.keys().hasOnly(['studentName', 'nameSource', 'updatedAt'])
         && request.resource.data.studentName is string
         && request.resource.data.studentName.size() > 0
-        && request.resource.data.studentName.size() <= 80;
+        && request.resource.data.studentName.size() <= 80
+        && (
+          (
+            resource.data.nameSource == 'profile'
+            && request.resource.data.nameSource in ['profile', 'chosen']
+          )
+          || (
+            resource.data.nameSource == 'chosen'
+            && request.resource.data.nameSource == 'chosen'
+            && request.resource.data.studentName == resource.data.studentName
+          )
+        );
 
       allow delete: if false;
     }
