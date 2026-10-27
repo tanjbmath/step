@@ -2301,13 +2301,17 @@ async function loadAssignmentProgressCounts(assignment) {
           actions.appendChild(btn);
         };
         if (audience === 'teacher') {
-          if (item.status === 'helping') addAction('Submit on behalf', 'px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold', () => submitPeerHelp(item.id, true));
+          if (item.status === 'helping') {
+            addAction('Submit on behalf', 'px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold', () => submitPeerHelp(item.id, true));
+            addAction('Release lock', 'px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold', () => expirePeerHelpRequest(item.id));
+          }
           if (item.status === 'pending') addAction('Expire request', 'px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold', () => expirePeerHelpRequest(item.id));
-          const elapsed = item.claimedAt?.toDate ? Math.max(0, Math.round((Date.now() - item.claimedAt.toDate().getTime()) / 60000)) : null;
+          const activityStamp = item.lastActivityAt || item.claimedAt;
+          const elapsed = activityStamp?.toDate ? Math.max(0, Math.round((Date.now() - activityStamp.toDate().getTime()) / 60000)) : null;
           if (item.status === 'helping' && elapsed !== null) {
             const timer = document.createElement('span');
-            timer.className = 'self-center text-xs text-amber-800 font-semibold';
-            timer.textContent = `Active ${elapsed} min`;
+            timer.className = 'self-center text-xs font-semibold ' + (elapsed >= 5 ? 'text-rose-700' : 'text-amber-800');
+            timer.textContent = elapsed >= 5 ? `No activity for ${elapsed} min — check or recover session` : `Last activity ${elapsed} min ago`;
             actions.appendChild(timer);
           }
         } else if (item.status === 'pending' && currentSubmissionStatus === 'completed' && !activeHelpRequestId) {
@@ -2512,9 +2516,13 @@ async function loadAssignmentProgressCounts(assignment) {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
       clearTimeout(saveTimeout);
       const dataUrl = exportCanvasJpeg();
+      const now = firebase.firestore.FieldValue.serverTimestamp();
       await db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(activeHelpRequestId)
         .collection('slides').doc(`slide_${currentSlideIndex}`)
-        .set({ canvasData: dataUrl, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
+      if (activeHelpMode === 'helper') {
+        await peerHelpRequestRef(activeHelpRequestId).update({ lastActivityAt: now, updatedAt: now });
+      }
     }
 
     async function submitPeerHelp(requestId, asTeacher = false) {
