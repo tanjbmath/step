@@ -2402,24 +2402,38 @@ async function loadAssignmentProgressCounts(assignment) {
             if (data.status === 'helping') {
               requesterHelpLock = true;
               updatePeerHelpControls();
-            } else if (['submitted', 'acknowledged', 'expired'].includes(data.status)) {
-              requesterHelpLock = false;
+            } else if (data.status === 'submitted') {
+              // Keep the requester locked until the submitted help canvas has been copied
+              // to their original slide; otherwise a quick new stroke could be overwritten.
+              requesterHelpLock = true;
               updatePeerHelpControls();
-              if (data.status === 'submitted' && !copiedHelpResults.has(requestDoc.id)) {
+              if (!copiedHelpResults.has(requestDoc.id)) {
                 copiedHelpResults.add(requestDoc.id);
                 try {
-                  const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${data.slideIndex || 0}`).get();
-                  if (slideDoc.exists && slideDoc.data().canvasData) {
-                    await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
-                      .collection('slides').doc(`slide_${data.slideIndex || 0}`)
-                      .set({ canvasData: slideDoc.data().canvasData, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), peerHelpRequestId: requestDoc.id }, { merge: true });
-                    if (!activeHelpRequestId) loadCurrentSlideData();
-                  }
+                  const slideIndex = Number(data.slideIndex || 0);
+                  const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${slideIndex}`).get();
+                  if (!slideDoc.exists || !slideDoc.data().canvasData) throw new Error('The saved help canvas was not found.');
+                  await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
+                    .collection('slides').doc(`slide_${slideIndex}`)
+                    .set({ canvasData: slideDoc.data().canvasData, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), peerHelpRequestId: requestDoc.id }, { merge: true });
+                  currentSlideIndex = slideIndex;
+                  updateSlideNavigationUI();
+                  if (!activeHelpRequestId) loadCurrentSlideData();
                 } catch (err) {
                   copiedHelpResults.delete(requestDoc.id);
                   console.error('Could not apply peer annotations to requester canvas:', err);
+                  showToast('Help was submitted, but the annotated canvas could not be copied. You can continue working; inform your teacher if needed.', 'error');
+                } finally {
+                  requesterHelpLock = false;
+                  updatePeerHelpControls();
                 }
+              } else {
+                requesterHelpLock = false;
+                updatePeerHelpControls();
               }
+            } else if (['acknowledged', 'expired'].includes(data.status)) {
+              requesterHelpLock = false;
+              updatePeerHelpControls();
             }
             ownedHelpRequestState.set(item.id, item);
             renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
