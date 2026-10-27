@@ -1,55 +1,63 @@
-# S.T.E.P. AI Tutor backend
+# S.T.E.P. AI Tutor — Free-tier setup
 
-The GitHub Pages frontend calls the Firebase callable function helpMeStart in the existing Firebase project classwork1314, region asia-southeast1.
+This version uses a Cloudflare Worker as the secret-holding backend and the Google Gemini Developer API from Google AI Studio. It does not use Firebase Cloud Functions, so deploying this AI endpoint does not require upgrading Firebase to Blaze.
 
-## Prerequisites
-- Node.js 20
-- Firebase CLI (npm install -g firebase-tools)
-- Access to the classwork1314 Firebase project
-- An OpenAI API key with API billing configured
+## 0. Protect the API key
 
-## Configure and deploy
-Run these commands from the repository root in PowerShell or a terminal:
+The Google AI Studio key previously pasted into chat should be treated as exposed. Revoke it in Google AI Studio and create a replacement. Never put the replacement in GitHub or browser JavaScript.
+
+## 1. Check the Gemini free tier
+
+Read https://ai.google.dev/gemini-api/docs/billing and https://ai.google.dev/gemini-api/docs/rate-limits. Confirm your project is on the Free tier and that the selected model is available. Limits vary by model and can change. Do not link a billing account if you want to avoid paid API usage.
+
+## 2. Create a Cloudflare Worker (free plan)
+
+1. Create/sign in to a Cloudflare account at https://dash.cloudflare.com/.
+2. Install Node.js if needed, then from the repository root run:
 
 ```powershell
-npm install -g firebase-tools
-firebase login
-firebase use classwork1314
-cd functions
-npm install
-cd ..
-firebase functions:secrets:set OPENAI_API_KEY
-firebase deploy --only firestore:rules --project classwork1314
-firebase deploy --only functions:helpMeStart --project classwork1314
+npm install -g wrangler
+wrangler login
+wrangler deploy
 ```
 
-When prompted by firebase functions:secrets:set, paste the OpenAI API key into the terminal prompt. Do not paste the key into source files, GitHub, browser JavaScript, chat messages, or a public issue. The key is stored as a Firebase secret and only the server-side function can read it.
+The repository's `wrangler.toml` configures the Worker name and entry point. Cloudflare will create the Worker during deployment.
 
-Cloud Functions deployment may require the Firebase project to use the Blaze (pay-as-you-go) plan. OpenAI API billing is separate from any ChatGPT subscription.
+## 3. Store the Gemini API key as a Worker secret
 
-## Firestore security rule required for usage counters
-Add this rule to the existing Firestore rules without replacing the other rules:
+After revoking the exposed key and creating a replacement in Google AI Studio, run:
 
-```
-match /aiTutorUsage/{uid} {
-  allow read, write: if false;
-}
+```powershell
+wrangler secret put GEMINI_API_KEY
 ```
 
-The Admin SDK in the Cloud Function can still write usage counters. Client-side users cannot read or change their quota.
+Paste the replacement key only into the terminal prompt. Never add it to `wrangler.toml`, source files, GitHub, or browser JavaScript. Deploy again:
 
-## Test
-1. Deploy the function successfully.
-2. Open the GitHub Pages S.T.E.P. site and sign in.
-3. Join an assignment as a student.
-4. Open a slide with question text or a question image.
-5. Press Help Me Start and confirm a short hint appears.
-6. Test Check my step, Give me another hint, and Show a similar example.
-7. Confirm the OpenAI API key does not appear in browser DevTools or any repository file.
+```powershell
+wrangler deploy
+```
 
-## Notes
-- The frontend uses the Firebase Functions compatibility SDK and calls the function in asia-southeast1.
-- The function verifies Firebase Authentication and that the signed-in student has a joined-student record for the assignment.
-- The function allows up to 25 AI requests per student per rolling hour window, with a two-second minimum gap between requests.
-- Uploaded question images are resized in the browser before being sent. Image-only questions are supported when the uploaded image is readable.
-- Before wider student rollout, consider enabling Firebase App Check and monitoring Firebase/OpenAI usage and billing.
+## 4. Connect the S.T.E.P. frontend
+
+Cloudflare will show a URL similar to `https://step-ai-tutor.YOUR-SUBDOMAIN.workers.dev`.
+
+1. Open `script.js`.
+2. Find `STEP_AI_TUTOR_WORKER_URL`.
+3. Replace `https://REPLACE-WITH-YOUR-WORKER.workers.dev` with the actual Worker URL.
+4. Commit and push that change to `main` so GitHub Pages publishes it.
+
+## 5. Test
+
+1. Open https://tanjbmath.github.io/step/ and sign in with Google.
+2. Join an assignment as a student and open a question.
+3. Test Help Me Start, Check my step, Give me another hint, Show a similar example, and an uploaded question image.
+4. Confirm an account that has not joined the assignment is denied.
+
+## Free-tier and security notes
+
+- Cloudflare Workers Free has a daily request quota. Check https://developers.cloudflare.com/workers/platform/limits/ for current limits.
+- Gemini free-tier model availability and quotas vary. Check the active limits in Google AI Studio. When the free quota is exhausted, requests should fail rather than require an upgrade.
+- The Worker verifies Firebase ID-token signatures and checks assignment membership against Firestore using the student's token. The Gemini API key stays on the server.
+- The included per-isolate throttle is best-effort, not a globally consistent quota. Gemini project quotas and Cloudflare plan limits are the main safeguards; this is not production-grade abuse prevention.
+- Google's Gemini API Free tier may use prompts and responses to improve Google products. Avoid sending confidential student information; check Google's current terms.
+- Firebase Authentication and Firestore remain in use. This AI backend does not use Firebase Cloud Functions.
