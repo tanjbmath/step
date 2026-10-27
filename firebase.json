@@ -2,4 +2,4 @@
   "firestore": {
     "rules": "firestore.rules"
   }
-}\n
+}
