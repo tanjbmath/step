@@ -19,6 +19,7 @@ cd functions
 npm install
 cd ..
 firebase functions:secrets:set OPENAI_API_KEY
+firebase deploy --only firestore:rules --project classwork1314
 firebase deploy --only functions:helpMeStart --project classwork1314
 ```
 
