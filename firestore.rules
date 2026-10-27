@@ -313,11 +313,13 @@ service cloud.firestore {
             && resource.data.status == 'helping'
             && resource.data.helperUid == request.auth.uid
             && request.resource.data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/help_submitted_$(requestId)).data.requestId == requestId
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt'])
           ) || (
             isHelpRequester(assignmentId, requestId)
             && resource.data.status == 'submitted'
             && request.resource.data.status == 'acknowledged'
+            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/help_thanked_$(requestId)).data.requestId == requestId
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'thankedAt', 'updatedAt'])
           ) || (
             ownsAssignment(assignmentId)
@@ -325,12 +327,7 @@ service cloud.firestore {
             && request.resource.data.status == 'submitted'
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt', 'teacherSubmittedBy', 'teacherSubmittedAt'])
             && request.resource.data.teacherSubmittedBy == request.auth.uid
-          ) || (
-            ownsAssignment(assignmentId)
-            && resource.data.status == 'helping'
-            && request.resource.data.status == 'submitted'
-            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'submitted'
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/teacher_submitted_$(requestId)).data.requestId == requestId
           ) || (
             ownsAssignment(assignmentId)
             && resource.data.status in ['pending', 'helping']
