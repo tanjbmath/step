@@ -844,8 +844,15 @@
         for (let i = 0; i < slides.docs.length; i += 400) {
           const batch = db.batch(); slides.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref)); await batch.commit();
         }
-        await studentRef.delete();
-        await db.collection('users').doc(signedInUser.uid).collection('submissions').doc(assignmentId).delete();
+        const studentDoc = await studentRef.get();
+        if (studentDoc.exists) {
+          await studentRef.delete();
+        }
+        // A teacher may already have deleted the assignment and its student document.
+        // Remove the remaining personal history record even when the assignment no longer exists.
+        const submissionRef = db.collection('users').doc(signedInUser.uid).collection('submissions').doc(assignmentId);
+        const submissionDoc = await submissionRef.get();
+        if (submissionDoc.exists) await submissionRef.delete();
         showToast('Assignment removed from your work history.', 'success');
       } catch (err) {
         console.error('Student assignment deletion failed:', err);
