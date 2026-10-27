@@ -191,6 +191,8 @@
     let activeHelpRequestData = null;
     let activeHelpMode = null; // 'helper' or 'teacher'
     let requesterHelpLock = false;
+    let hasOpenOwnedHelpRequest = false;
+    const ownedHelpRequestState = new Map();
     let unsubHelpRequests = null;
     let unsubOwnedHelpRequests = null;
     let ownedHelpRequestListeners = [];
@@ -1371,7 +1373,7 @@ async function loadAssignmentProgressCounts(assignment) {
       button.disabled = false;
       button.textContent = 'Submit assignment';
       const ask = document.getElementById('askForHelpBtn');
-      if (ask) ask.classList.toggle('hidden', !isStudent || currentSubmissionStatus !== 'in-progress' || requesterHelpLock || Boolean(activeHelpRequestId));
+      if (ask) ask.classList.toggle('hidden', !isStudent || currentSubmissionStatus !== 'in-progress' || requesterHelpLock || hasOpenOwnedHelpRequest || Boolean(activeHelpRequestId));
     }
 
     document.getElementById('teacherMarkCompletedBtn').addEventListener('click', async () => {
@@ -2391,7 +2393,7 @@ async function loadAssignmentProgressCounts(assignment) {
       unsubOwnedHelpRequests = ownersRef.where('requesterUid', '==', signedInUser.uid).onSnapshot(snapshot => {
         ownedHelpRequestListeners.forEach(unsub => unsub());
         ownedHelpRequestListeners = [];
-        const owned = [];
+        ownedHelpRequestState.clear();
         snapshot.docs.forEach(ownerDoc => {
           const unsub = requestsRef.doc(ownerDoc.id).onSnapshot(async requestDoc => {
             if (!requestDoc.exists) return;
@@ -2419,17 +2421,23 @@ async function loadAssignmentProgressCounts(assignment) {
                 }
               }
             }
-            owned.push(item);
-            renderOwnedPeerHelpRequests(owned);
+            ownedHelpRequestState.set(item.id, item);
+            renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
           }, err => console.warn('Owned Peer Help listener:', err));
           ownedHelpRequestListeners.push(unsub);
         });
-        if (!snapshot.docs.length) renderOwnedPeerHelpRequests([]);
+        if (!snapshot.docs.length) {
+          hasOpenOwnedHelpRequest = false;
+          renderOwnedPeerHelpRequests([]);
+          updatePeerHelpControls();
+        }
       }, err => console.warn('Private Peer Help owner listener:', err));
     }
 
     function renderOwnedPeerHelpRequests(items) {
       const list = document.getElementById('peerHelpRequestList');
+      hasOpenOwnedHelpRequest = items.some(item => ['pending', 'helping', 'submitted'].includes(item.status));
+      updateSubmitAssignmentButton();
       if (!list) return;
       const existing = Array.from(list.querySelectorAll('[data-owned-request]'));
       existing.forEach(node => node.remove());
