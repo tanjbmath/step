@@ -60,10 +60,17 @@
       }
     }
 
+    // Set this to the deployed Cloudflare Worker URL after deployment.
+    const STEP_AI_TUTOR_WORKER_URL = 'https://REPLACE-WITH-YOUR-WORKER.workers.dev';
+
     async function askStepAiTutor(mode) {
       if (aiTutorBusy) return;
       if (!signedInUser || !currentAssignmentId || currentUserRole !== 'student' || inspectingStudentId) {
         showToast('Open your own student assignment before using the AI tutor.', 'error');
+        return;
+      }
+      if (!STEP_AI_TUTOR_WORKER_URL || STEP_AI_TUTOR_WORKER_URL.includes('REPLACE-WITH-YOUR-WORKER')) {
+        showToast('The AI backend URL is not configured yet. Follow AI_TUTOR_SETUP.md.', 'error');
         return;
       }
       const slide = getCurrentTutorSlide();
@@ -85,18 +92,31 @@
       setAiTutorBusy(true, 'Thinking about this question...');
       try {
         const imageDataUrl = await getTutorQuestionImage(slide);
-        const callable = firebase.app().functions('asia-southeast1').httpsCallable('helpMeStart', { timeout: 60000 });
-        const result = await callable({
-          assignmentId: currentAssignmentId,
-          question: question.slice(0, 6000),
-          topic: String(currentAssignmentData?.title || '').slice(0, 160),
-          questionContext: String(currentAssignmentData?.description || '').slice(0, 1200),
-          studentReply: studentReply.slice(0, 1500),
-          mode,
-          hintLevel: mode === 'nextHint' ? Math.min(3, Math.max(1, aiTutorHintLevel + 1)) : (mode === 'similarExample' ? 3 : Math.max(1, aiTutorHintLevel)),
-          imageDataUrl
+        const idToken = await signedInUser.getIdToken();
+        const response = await fetch(STEP_AI_TUTOR_WORKER_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + idToken
+          },
+          body: JSON.stringify({
+            assignmentId: currentAssignmentId,
+            question: question.slice(0, 6000),
+            topic: String(currentAssignmentData?.title || '').slice(0, 160),
+            questionContext: String(currentAssignmentData?.description || '').slice(0, 1200),
+            studentReply: studentReply.slice(0, 1500),
+            mode,
+            hintLevel: mode === 'nextHint' ? Math.min(3, Math.max(1, aiTutorHintLevel + 1)) : (mode === 'similarExample' ? 3 : Math.max(1, aiTutorHintLevel)),
+            imageDataUrl
+          })
         });
-        const hint = String(result?.data?.hint || '').trim();
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(result.error || 'AI tutor request failed (' + response.status + ').');
+          error.status = response.status;
+          throw error;
+        }
+        const hint = String(result.hint || '').trim();
         if (!hint) throw new Error('The AI tutor returned an empty hint. Please try again.');
         responseBox.textContent = hint;
         responseBox.classList.remove('hidden');
@@ -108,10 +128,9 @@
       } catch (error) {
         console.error('STEP AI tutor request failed:', error);
         let message = error?.message || 'Unknown error';
-        if (error?.code === 'functions/unauthenticated') message = 'Please sign in again before asking the tutor.';
-        else if (error?.code === 'functions/permission-denied') message = 'The tutor is only available for your own joined assignment.';
-        else if (error?.code === 'functions/resource-exhausted') message = 'You have reached the short-term AI help limit. Please wait a little and try again.';
-        else if (/not found|NOT_FOUND/i.test(message)) message = 'The AI backend is not deployed yet. Follow AI_TUTOR_SETUP.md to deploy the helpMeStart function.';
+        if (error?.status === 401) message = 'Your sign-in expired. Sign in again.';
+        else if (error?.status === 403) message = 'The tutor is only available for a student who has joined this assignment.';
+        else if (error?.status === 429) message = 'The free AI request limit was reached. Wait a while and try again.';
         showToast('AI tutor could not respond: ' + message, 'error');
         setAiTutorBusy(false, '');
       }
