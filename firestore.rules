@@ -264,6 +264,12 @@ service cloud.firestore {
             signedIn()
             && resource.data.status == 'helping'
             && resource.data.helperUid == request.auth.uid
+            && request.resource.data.status == 'helping'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActivityAt', 'updatedAt'])
+          ) || (
+            signedIn()
+            && resource.data.status == 'helping'
+            && resource.data.helperUid == request.auth.uid
             && request.resource.data.status == 'submitted'
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt'])
           ) || (
