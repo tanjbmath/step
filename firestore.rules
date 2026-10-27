@@ -195,5 +195,10 @@ service cloud.firestore {
         }
       }
     }
+
+    // Server-only AI usage counters. Admin SDK access from Cloud Functions bypasses these client rules.
+    match /aiTutorUsage/{uid} {
+      allow read, write: if false;
+    }
   }
 }
