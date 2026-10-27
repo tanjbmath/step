@@ -56,6 +56,13 @@
           const teacherBtn = document.getElementById('selectTeacherBtn');
           teacherBtn.classList.add('hidden');
           accountRole = 'student';
+          // Keep the name field locked until the saved account name has been checked.
+          // This prevents a brief editable state while the asynchronous profile lookup runs.
+          const nameInputWhileLoading = document.getElementById('studentNameInput');
+          if (nameInputWhileLoading) {
+            nameInputWhileLoading.readOnly = true;
+            nameInputWhileLoading.title = 'Checking your saved student name…';
+          }
           try {
             const userRef = db.collection('users').doc(user.uid);
             await userRef.set({
@@ -96,7 +103,15 @@
             }
           } catch (err) {
             console.warn('Profile/role lookup notice:', err);
-            showToast('Could not verify your account role. Student access remains available.', 'info');
+            // If profile verification failed, keep the field locked rather than risk
+            // suggesting that a different name can be saved for this account.
+            const nameInput = document.getElementById('studentNameInput');
+            if (nameInput) {
+              nameInput.value = studentProfileName || user.displayName || (user.email || 'Student').split('@')[0];
+              nameInput.readOnly = true;
+              nameInput.title = 'Could not verify your saved name. Reload the page and try again before joining.';
+            }
+            showToast('Could not verify your saved student name. Reload the page before joining an assignment.', 'info');
           }
           if (accountRole === 'teacher') {
             teacherBtn.classList.remove('hidden');
@@ -1177,6 +1192,8 @@ async function loadAssignmentProgressCounts(assignment) {
         showToast("Please provide both code and student name", "error");
         return;
       }
+      // A saved canonical name is authoritative even if the UI state was stale.
+      if (studentProfileName) name = studentProfileName;
 
       joinBtn.disabled = true;
       joinBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Joining...`;
