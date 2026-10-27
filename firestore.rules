@@ -433,6 +433,10 @@ service cloud.firestore {
               && get(requestDoc()).data.status in ['helping', 'submitted', 'acknowledged']);
 
         allow create, update: if (
+            signedIn()
+            && getAfter(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid
+            && getAfter(requestDoc()).data.status == 'pending'
+          ) || (
             isHelpRequester(assignmentId, requestId)
             && getAfter(requestDoc()).data.status == 'pending'
           ) || (
