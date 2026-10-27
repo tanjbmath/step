@@ -18,6 +18,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-functions-compat.js"></script>
 
   <link rel="stylesheet" href="./style.css">
 </head>
@@ -260,6 +261,32 @@
         <div id="questionImageContainer" class="w-full mb-3 hidden">
           <img id="questionImageDisplay" class="block mx-auto max-w-full max-h-48 sm:max-h-56 object-contain rounded border border-slate-200 bg-white" alt="Question image">
         </div>
+
+        <!-- AI Help Me Start: visible only to students working on an assignment -->
+        <section id="aiTutorContainer" class="w-full mb-3 hidden" aria-label="AI Mathematics tutor">
+          <div class="flex flex-wrap items-center gap-2">
+            <button id="helpMeStartBtn" type="button" class="inline-flex items-center gap-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white px-4 py-2.5 font-semibold text-sm shadow-sm transition">
+              <i class="fa-solid fa-wand-magic-sparkles"></i> Help Me Start
+            </button>
+            <span class="text-xs text-slate-500">Get one small hint. The AI will not solve the whole question for you.</span>
+          </div>
+          <div id="aiTutorPanel" class="hidden mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3 sm:p-4 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="font-bold text-violet-950 flex items-center gap-2"><i class="fa-solid fa-graduation-cap"></i> STEP AI Tutor</h3>
+              <button id="aiTutorCloseBtn" type="button" class="text-violet-800 hover:text-violet-950 rounded p-1" aria-label="Close AI tutor"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <p id="aiTutorStatus" class="hidden text-sm text-violet-800" role="status" aria-live="polite"></p>
+            <div id="aiTutorResponse" class="hidden rounded-lg bg-white border border-violet-100 p-3 text-sm leading-relaxed text-slate-800 whitespace-pre-wrap"></div>
+            <label for="aiTutorStudentReply" class="block text-sm font-semibold text-slate-700">Your attempt or question (optional)</label>
+            <textarea id="aiTutorStudentReply" rows="2" maxlength="1500" class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400" placeholder="Write your first step, or tell the tutor what you do not understand..."></textarea>
+            <div class="flex flex-wrap gap-2">
+              <button id="aiTutorCheckStepBtn" type="button" class="rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 text-xs font-semibold">Check my step</button>
+              <button id="aiTutorNextHintBtn" type="button" class="rounded-lg border border-violet-300 bg-white hover:bg-violet-100 text-violet-900 px-3 py-2 text-xs font-semibold">Give me another hint</button>
+              <button id="aiTutorExampleBtn" type="button" class="rounded-lg border border-violet-300 bg-white hover:bg-violet-100 text-violet-900 px-3 py-2 text-xs font-semibold">Show a similar example</button>
+            </div>
+            <p class="text-xs text-slate-500">Use AI feedback to learn. Check your working, and write your own solution on the canvas.</p>
+          </div>
+        </section>
 
         <!-- Drawing Toolbar -->
         <div id="drawingToolbar" class="flex items-center flex-nowrap gap-2 mb-3">
