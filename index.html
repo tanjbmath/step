@@ -8,6 +8,9 @@
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
+  <!-- Math-friendly AI tutor response rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
+  
   <!-- Font Awesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
@@ -275,7 +278,7 @@
               <button id="aiTutorCloseBtn" type="button" class="text-violet-800 hover:text-violet-950 rounded p-1" aria-label="Close AI tutor"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <p id="aiTutorStatus" class="hidden text-sm text-violet-800" role="status" aria-live="polite"></p>
-            <div id="aiTutorResponse" class="hidden rounded-lg bg-white border border-violet-100 p-3 text-sm leading-relaxed text-slate-800 whitespace-pre-wrap"></div>
+            <div id="aiTutorResponse" class="ai-tutor-response hidden rounded-lg bg-white border border-violet-100 p-4 text-sm leading-relaxed text-slate-800"></div>
             <label for="aiTutorStudentReply" class="block text-sm font-semibold text-slate-700">Your attempt or question (optional)</label>
             <textarea id="aiTutorStudentReply" rows="2" maxlength="1500" class="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400" placeholder="Write your first step, or tell the tutor what you do not understand..."></textarea>
             <div class="flex flex-wrap gap-2">
@@ -413,6 +416,11 @@
     </div>
   </div>
 
+  <!-- Safe Markdown rendering and mathematical typesetting for AI tutor replies -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js"></script>
   <script src="./script.js"></script>
 </body>
 </html>
