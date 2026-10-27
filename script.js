@@ -2221,6 +2221,10 @@ async function loadAssignmentProgressCounts(assignment) {
       const textTool = document.getElementById('toolText');
       const penTool = document.getElementById('toolPen');
       const lockTools = helperMode || teacherMode || requesterHelpLock;
+      ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn'].forEach(id => {
+        const control = document.getElementById(id);
+        if (control) control.disabled = requesterHelpLock || ((helperMode || teacherMode) && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
+      });
       if (colorPicker) {
         colorPicker.disabled = lockTools;
         if (lockTools) colorPicker.value = PEER_HELP_COLOUR;
@@ -2242,11 +2246,19 @@ async function loadAssignmentProgressCounts(assignment) {
       if (audience === 'teacher' && !teacherList) return;
       const target = audience === 'teacher' ? teacherList : list;
       if (!target) return;
+      target.querySelectorAll('[data-peer-request]').forEach(node => node.remove());
+      const oldEmpty = target.querySelector('[data-peer-help-empty]');
+      if (oldEmpty) oldEmpty.remove();
       if (!requests.length) {
-        target.innerHTML = '<p class="text-sm text-slate-500">No peer help requests to show.</p>';
+        if (!target.querySelector('[data-owned-request]')) {
+          const empty = document.createElement('p');
+          empty.dataset.peerHelpEmpty = 'true';
+          empty.className = 'text-sm text-slate-500';
+          empty.textContent = 'No peer help requests to show.';
+          target.appendChild(empty);
+        }
         return;
       }
-      target.innerHTML = '';
       requests.sort((a, b) => {
         const order = { helping: 0, pending: 1, submitted: 2, acknowledged: 3, expired: 4 };
         return (order[a.status] ?? 5) - (order[b.status] ?? 5);
@@ -2254,12 +2266,21 @@ async function loadAssignmentProgressCounts(assignment) {
         const card = document.createElement('div');
         card.className = 'peer-help-request-card';
         card.dataset.status = item.status || 'pending';
+        card.dataset.peerRequest = item.id;
         const question = document.createElement('p');
         question.className = 'text-sm font-semibold text-slate-800 whitespace-pre-wrap';
         question.textContent = item.question || 'Help request';
         const status = document.createElement('p');
         status.className = 'text-xs text-slate-500 mt-1';
-        status.textContent = (item.status || 'pending').replace(/-/g, ' ').replace(/^./, x => x.toUpperCase());
+        status.textContent = audience === 'teacher' && item.status === 'helping'
+          ? 'Someone is helping • Active session'
+          : (item.status || 'pending').replace(/-/g, ' ').replace(/^./, x => x.toUpperCase());
+        if (audience === 'teacher' && item.requesterLabel) {
+          const requester = document.createElement('p');
+          requester.className = 'text-xs text-slate-600 mt-1';
+          requester.textContent = 'Requester: ' + item.requesterLabel;
+          card.appendChild(requester);
+        }
         card.append(question, status);
         const actions = document.createElement('div');
         actions.className = 'flex flex-wrap gap-2 mt-3';
@@ -2560,9 +2581,22 @@ async function loadAssignmentProgressCounts(assignment) {
     function startTeacherHelpMonitor(assignmentId) {
       if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
       if (!db || !signedInUser || currentUserRole !== 'teacher' || !assignmentId) return;
-      unsubTeacherHelpRequests = db.collection('assignments').doc(assignmentId).collection('helpRequests')
-        .onSnapshot(snapshot => renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })), 'teacher'),
-          err => {
+      const assignmentRef = db.collection('assignments').doc(assignmentId);
+      unsubTeacherHelpRequests = assignmentRef.collection('helpRequests')
+        .onSnapshot(async snapshot => {
+          const requests = await Promise.all(snapshot.docs.map(async d => {
+            const data = { id: d.id, ...d.data() };
+            try {
+              const owner = await assignmentRef.collection('helpRequestOwners').doc(d.id).get();
+              if (owner.exists && owner.data().requesterUid) {
+                const student = await assignmentRef.collection('students').doc(owner.data().requesterUid).get();
+                data.requesterLabel = student.exists ? (student.data().name || 'Student') : 'Student';
+              }
+            } catch (err) { console.warn('Could not resolve requester for teacher view:', err); }
+            return data;
+          }));
+          renderPeerHelpRequests(requests, 'teacher');
+        }, err => {
             console.warn('Teacher Peer Help monitor:', err);
             const target = document.getElementById('teacherPeerHelpList');
             if (target) target.innerHTML = '<p class="text-sm text-rose-600">Could not load Peer Help requests. Check Firestore rules.</p>';
