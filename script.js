@@ -1297,8 +1297,6 @@ async function loadAssignmentProgressCounts(assignment) {
       document.getElementById('nextSlideBtn').disabled = (currentSlideIndex === totalSlides - 1);
 
       const slideConfig = currentAssignmentData?.slides?.[currentSlideIndex];
-      updateAiTutorVisibility();
-      document.getElementById('aiTutorStudentReply').value = '';
       const promptContainer = document.getElementById('slidePromptContainer');
       const promptText = document.getElementById('slidePromptText');
       const currentSlidePrompt = slideConfig?.prompt;
