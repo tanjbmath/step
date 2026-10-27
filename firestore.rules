@@ -420,7 +420,7 @@ service cloud.firestore {
 
         allow create, update: if (
             isHelpRequester(assignmentId, requestId)
-            && get(requestDoc()).data.status == 'pending'
+            && getAfter(requestDoc()).data.status == 'pending'
           ) || (
             signedIn()
             && get(requestDoc()).data.helperUid == request.auth.uid
