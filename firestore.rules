@@ -34,6 +34,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(workKey);
     }
 
+    function peerHelpEventPath(uid, eventId) {
+      return /databases/$(database)/documents/users/$(uid)/peerHelpEvents/$(eventId);
+    }
+
     function isHelpRequester(assignmentId, requestId) {
       return signedIn()
         && exists(helpOwnerPath(assignmentId, requestId))
@@ -317,13 +321,13 @@ service cloud.firestore {
             && resource.data.status == 'helping'
             && resource.data.helperUid == request.auth.uid
             && request.resource.data.status == 'submitted'
-            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/help_submitted_$(requestId)).data.requestId == requestId
+            && getAfter(peerHelpEventPath(request.auth.uid, 'help_submitted_' + requestId)).data.requestId == requestId
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt'])
           ) || (
             isHelpRequester(assignmentId, requestId)
             && resource.data.status == 'submitted'
             && request.resource.data.status == 'acknowledged'
-            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/help_thanked_$(requestId)).data.requestId == requestId
+            && getAfter(peerHelpEventPath(request.auth.uid, 'help_thanked_' + requestId)).data.requestId == requestId
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'thankedAt', 'updatedAt'])
           ) || (
             ownsAssignment(assignmentId)
@@ -331,7 +335,7 @@ service cloud.firestore {
             && request.resource.data.status == 'submitted'
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt', 'teacherSubmittedBy', 'teacherSubmittedAt'])
             && request.resource.data.teacherSubmittedBy == request.auth.uid
-            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/teacher_submitted_$(requestId)).data.requestId == requestId
+            && getAfter(peerHelpEventPath(request.auth.uid, 'teacher_submitted_' + requestId)).data.requestId == requestId
           ) || (
             ownsAssignment(assignmentId)
             && resource.data.status in ['pending', 'helping']
