@@ -268,6 +268,41 @@
       document.getElementById('closePeersBtn').focus();
 
       try {
+        // Re-sync the current signed-in student's minimal directory entry when Peers opens.
+        // This also repairs a missed registration for an existing session without requiring
+        // the student to sign out and sign back in.
+        const profileSnapshot = await db.collection('users').doc(signedInUser.uid).get();
+        const profileData = profileSnapshot.exists ? profileSnapshot.data() : {};
+        const canonicalName = typeof profileData.studentName === 'string'
+          ? profileData.studentName.trim()
+          : '';
+        const googleName = typeof signedInUser.displayName === 'string'
+          ? signedInUser.displayName.trim()
+          : '';
+        const directoryName = canonicalName || googleName;
+
+        if (profileData.role !== 'teacher' && directoryName) {
+          const peerRef = db.collection('peerDirectory').doc(signedInUser.uid);
+          const peerSnapshot = await peerRef.get();
+          if (!peerSnapshot.exists) {
+            await peerRef.set({
+              studentName: directoryName,
+              nameSource: canonicalName ? 'chosen' : 'profile',
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          } else {
+            const peerData = peerSnapshot.data() || {};
+            // Never overwrite a name the student has already chosen.
+            if (peerData.nameSource !== 'chosen' && peerData.studentName !== directoryName) {
+              await peerRef.set({
+                studentName: directoryName,
+                nameSource: 'profile',
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              }, { merge: true });
+            }
+          }
+        }
+
         // Read only the deliberately public directory collection, never private user profiles.
         const snapshot = await db.collection('peerDirectory').get();
         const peers = snapshot.docs
