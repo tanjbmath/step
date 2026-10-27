@@ -1,180 +1,5 @@
 
     // ==========================================
-    // S.T.E.P. AI TUTOR — HELP ME START
-    // ==========================================
-    let aiTutorHintLevel = 0;
-    let aiTutorBusy = false;
-
-    function updateAiTutorVisibility() {
-      const container = document.getElementById('aiTutorContainer');
-      if (!container) return;
-      const isStudentWorking = currentUserRole === 'student' && !inspectingStudentId && !!currentAssignmentId;
-      container.classList.toggle('hidden', !isStudentWorking);
-      if (!isStudentWorking) document.getElementById('aiTutorPanel')?.classList.add('hidden');
-    }
-
-    function setAiTutorBusy(busy, message = '') {
-      aiTutorBusy = busy;
-      ['helpMeStartBtn', 'aiTutorCheckStepBtn', 'aiTutorNextHintBtn', 'aiTutorExampleBtn'].forEach(id => {
-        const button = document.getElementById(id);
-        if (button) button.disabled = busy;
-      });
-      const status = document.getElementById('aiTutorStatus');
-      if (status) {
-        status.textContent = message;
-        status.classList.toggle('hidden', !message);
-      }
-      const startButton = document.getElementById('helpMeStartBtn');
-      if (startButton) {
-        startButton.innerHTML = busy
-          ? '<i class="fa-solid fa-spinner fa-spin"></i> Thinking...'
-          : '<i class="fa-solid fa-wand-magic-sparkles"></i> Help Me Start';
-      }
-    }
-
-    function getCurrentTutorSlide() {
-      return currentAssignmentData?.slides?.[currentSlideIndex] || {};
-    }
-
-    async function getTutorQuestionImage(slide) {
-      const raw = slide?.questionImage ||
-        (typeof slide?.bgUrl === 'string' && slide.bgUrl.startsWith('data:image/') ? slide.bgUrl : '');
-      if (!raw || !raw.startsWith('data:image/')) return '';
-      try {
-        const image = await new Promise((resolve, reject) => {
-          const element = new Image();
-          element.onload = () => resolve(element);
-          element.onerror = reject;
-          element.src = raw;
-        });
-        const maxSide = 1100;
-        const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', 0.72);
-      } catch (error) {
-        console.warn('Could not prepare question image for AI tutor:', error);
-        return '';
-      }
-    }
-
-    // Set this to the deployed Cloudflare Worker URL after deployment.
-    const STEP_AI_TUTOR_WORKER_URL = 'https://step-ai-tutor.junbin89.workers.dev';
-
-    // Render tutor replies as safe Markdown, then typeset LaTeX with KaTeX.
-    // Falls back to plain text if a CDN library is unavailable.
-    function renderStepAiTutorResponse(element, source) {
-      const text = String(source || '').replace(/\r\n?/g, '\n').trim();
-      if (!window.marked || !window.DOMPurify) {
-        element.textContent = text;
-        return;
-      }
-      try {
-        const markdownHtml = window.marked.parse(text, { breaks: true, gfm: true });
-        element.innerHTML = window.DOMPurify.sanitize(markdownHtml, { USE_PROFILES: { html: true } });
-        if (window.renderMathInElement) {
-          window.renderMathInElement(element, {
-            delimiters: [
-              { left: String.fromCharCode(36, 36), right: String.fromCharCode(36, 36), display: true },
-              { left: '\\[', right: '\\]', display: true },
-              { left: '\\(', right: '\\)', display: false },
-              { left: String.fromCharCode(36), right: String.fromCharCode(36), display: false }
-            ],
-            throwOnError: false,
-            ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
-          });
-        }
-      } catch (error) {
-        console.warn('Could not format AI tutor response; showing plain text.', error);
-        element.textContent = text;
-      }
-    }
-
-    async function askStepAiTutor(mode) {
-      if (aiTutorBusy) return;
-      if (!signedInUser || !currentAssignmentId || currentUserRole !== 'student' || inspectingStudentId) {
-        showToast('Open your own student assignment before using the AI tutor.', 'error');
-        return;
-      }
-      if (!STEP_AI_TUTOR_WORKER_URL || STEP_AI_TUTOR_WORKER_URL.includes('REPLACE-WITH-YOUR-WORKER')) {
-        showToast('The AI backend URL is not configured yet. Follow AI_TUTOR_SETUP.md.', 'error');
-        return;
-      }
-      const slide = getCurrentTutorSlide();
-      const question = String(slide.prompt || '').trim();
-      const studentReply = String(document.getElementById('aiTutorStudentReply').value || '').trim();
-      if (!question && !slide.questionImage && !slide.bgUrl) {
-        showToast('This slide has no question text or uploaded question image for the tutor to read.', 'error');
-        return;
-      }
-      if (mode === 'checkStep' && !studentReply) {
-        showToast('Write one step or question first, then ask the tutor to check it.', 'info');
-        document.getElementById('aiTutorStudentReply').focus();
-        return;
-      }
-      const responseBox = document.getElementById('aiTutorResponse');
-      document.getElementById('aiTutorPanel').classList.remove('hidden');
-      responseBox.classList.add('hidden');
-      responseBox.textContent = '';
-      setAiTutorBusy(true, 'Thinking about this question...');
-      try {
-        const imageDataUrl = await getTutorQuestionImage(slide);
-        const idToken = await signedInUser.getIdToken();
-        const response = await fetch(STEP_AI_TUTOR_WORKER_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + idToken
-          },
-          body: JSON.stringify({
-            assignmentId: currentAssignmentId,
-            question: question.slice(0, 6000),
-            topic: String(currentAssignmentData?.title || '').slice(0, 160),
-            questionContext: String(currentAssignmentData?.description || '').slice(0, 1200),
-            studentReply: studentReply.slice(0, 1500),
-            mode,
-            hintLevel: mode === 'nextHint' ? Math.min(3, Math.max(1, aiTutorHintLevel + 1)) : (mode === 'similarExample' ? 3 : Math.max(1, aiTutorHintLevel)),
-            imageDataUrl
-          })
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          const error = new Error(result.error || 'AI tutor request failed (' + response.status + ').');
-          error.status = response.status;
-          throw error;
-        }
-        const hint = String(result.hint || '').trim();
-        if (!hint) throw new Error('The AI tutor returned an empty hint. Please try again.');
-        responseBox.textContent = hint;
-        responseBox.classList.remove('hidden');
-        if (mode === 'start') aiTutorHintLevel = 1;
-        else if (mode === 'nextHint') aiTutorHintLevel = Math.min(3, aiTutorHintLevel + 1);
-        else if (mode === 'similarExample') aiTutorHintLevel = 3;
-        setAiTutorBusy(false, '');
-        document.getElementById('aiTutorStatus').classList.add('hidden');
-      } catch (error) {
-        console.error('STEP AI tutor request failed:', error);
-        let message = error?.message || 'Unknown error';
-        if (error?.status === 401) message = 'Your sign-in expired. Sign in again.';
-        else if (error?.status === 403) message = 'The tutor is only available for a student who has joined this assignment.';
-        else if (error?.status === 429) message = 'The free AI request limit was reached. Wait a while and try again.';
-        showToast('AI tutor could not respond: ' + message, 'error');
-        setAiTutorBusy(false, '');
-      }
-    }
-
-    document.getElementById('helpMeStartBtn').addEventListener('click', () => {
-      document.getElementById('aiTutorPanel').classList.remove('hidden');
-      askStepAiTutor('start');
-    });
-    document.getElementById('aiTutorCheckStepBtn').addEventListener('click', () => askStepAiTutor('checkStep'));
-    document.getElementById('aiTutorNextHintBtn').addEventListener('click', () => askStepAiTutor('nextHint'));
-    document.getElementById('aiTutorExampleBtn').addEventListener('click', () => askStepAiTutor('similarExample'));
-    document.getElementById('aiTutorCloseBtn').addEventListener('click', () => document.getElementById('aiTutorPanel').classList.add('hidden'));
-
-    // ==========================================
     // 1. FIREBASE CONFIGURATION & INITIALIZATION
     // ==========================================
     const firebaseConfig = {
@@ -1154,7 +979,6 @@ async function loadAssignmentProgressCounts(assignment) {
       document.getElementById('exitWorkspaceBtn').classList.remove('hidden');
       document.getElementById('workspaceTitle').textContent = `Inspecting: ${stName}`;
       document.getElementById('workspaceSubtext').textContent = "Teacher annotations live-sync to the student's canvas";
-      updateAiTutorVisibility();
       document.getElementById('teacherReviewActions').classList.toggle('hidden', currentSubmissionStatus !== 'submitted');
       updateSubmitAssignmentButton();
 
@@ -1474,8 +1298,6 @@ async function loadAssignmentProgressCounts(assignment) {
 
       const slideConfig = currentAssignmentData?.slides?.[currentSlideIndex];
       updateAiTutorVisibility();
-      aiTutorHintLevel = 0;
-      document.getElementById('aiTutorResponse')?.classList.add('hidden');
       document.getElementById('aiTutorStudentReply').value = '';
       const promptContainer = document.getElementById('slidePromptContainer');
       const promptText = document.getElementById('slidePromptText');
