@@ -74,6 +74,12 @@
               nameInput.title = studentProfileName ? 'This name is saved to your account and is used for every assignment.' : 'Choose your name the first time you join an assignment. It will be saved for future assignments.';
             }
             accountRole = profileData.role === 'teacher' ? 'teacher' : 'student';
+            if (accountRole === 'student' && studentProfileName) {
+              await db.collection('peerDirectory').doc(user.uid).set({
+                studentName: studentProfileName,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              }, { merge: true });
+            }
           } catch (err) {
             console.warn('Profile/role lookup notice:', err);
             showToast('Could not verify your account role. Student access remains available.', 'info');
@@ -248,16 +254,14 @@
       document.getElementById('closePeersBtn').focus();
 
       try {
-        // Only render names and reserved badge slots; never display emails or other profile fields.
-        const snapshot = await db.collection('users').get();
+        // Read only the deliberately public directory collection, never private user profiles.
+        const snapshot = await db.collection('peerDirectory').get();
         const peers = snapshot.docs
-          .map(doc => ({ uid: doc.id, ...doc.data() }))
-          .filter(profile => profile.uid !== signedInUser.uid && profile.role !== 'teacher')
-          .map(profile => ({
-            name: (typeof profile.studentName === 'string' && profile.studentName.trim())
-              || (typeof profile.displayName === 'string' && profile.displayName.trim())
-              || 'Student'
+          .filter(doc => doc.id !== signedInUser.uid)
+          .map(doc => ({
+            name: typeof doc.data().studentName === 'string' ? doc.data().studentName.trim() : ''
           }))
+          .filter(peer => peer.name)
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
         peersCount.textContent = peers.length + (peers.length === 1 ? ' student' : ' students');
@@ -1127,13 +1131,23 @@ async function loadAssignmentProgressCounts(assignment) {
         // Atomically set the student's name only if this account has not chosen one before.
         // Existing names always win, so one Google account cannot use different names across assignments.
         const userRef = db.collection('users').doc(signedInUser.uid);
+        const peerRef = db.collection('peerDirectory').doc(signedInUser.uid);
         const canonicalName = await db.runTransaction(async transaction => {
           const userSnapshot = await transaction.get(userRef);
+          const peerSnapshot = await transaction.get(peerRef);
           const profileData = userSnapshot.exists ? userSnapshot.data() : {};
           const savedName = typeof profileData.studentName === 'string' ? profileData.studentName.trim() : '';
-          if (savedName) return savedName;
-          transaction.set(userRef, { studentName: name, studentNameSetAt: now }, { merge: true });
-          return name;
+          const chosenName = savedName || name;
+
+          if (!savedName) {
+            transaction.set(userRef, { studentName: chosenName, studentNameSetAt: now }, { merge: true });
+          }
+          // The directory stores only the student's chosen display name, not email or other profile data.
+          transaction.set(peerRef, {
+            studentName: chosenName,
+            updatedAt: now
+          }, { merge: true });
+          return chosenName;
         });
         name = canonicalName;
         studentProfileName = canonicalName;
