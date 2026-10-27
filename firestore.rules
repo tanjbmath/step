@@ -26,6 +26,26 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid));
     }
 
+    function helpOwnerPath(assignmentId, requestId) {
+      return /databases/$(database)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId);
+    }
+
+    function helpLockPath(assignmentId, workKey) {
+      return /databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(workKey);
+    }
+
+    function isHelpRequester(assignmentId, requestId) {
+      return signedIn()
+        && exists(helpOwnerPath(assignmentId, requestId))
+        && get(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid;
+    }
+
+    function isCompletedPeer(assignmentId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid))
+        && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'completed';
+    }
+
     match /users/{uid} {
       allow read: if isOwner(uid);
 
@@ -56,6 +76,48 @@ service cloud.firestore {
         ]);
 
       allow delete: if false;
+
+      match /peerHelpEvents/{eventId} {
+        allow read: if isOwner(uid) || isTeacher();
+
+        allow create: if (
+            isOwner(uid)
+            && request.resource.data.eventType == 'help-submitted'
+            && request.resource.data.helperUid == uid
+            && eventId == 'help_submitted_' + request.resource.data.requestId
+            && request.resource.data.assignmentId is string
+            && request.resource.data.requestId is string
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.helperUid == uid
+            && request.resource.data.keys().hasOnly(['eventType', 'assignmentId', 'requestId', 'helperUid', 'createdAt'])
+          ) || (
+            isOwner(uid)
+            && isTeacher()
+            && request.resource.data.eventType == 'teacher-submitted-on-behalf'
+            && request.resource.data.teacherUid == uid
+            && eventId == 'teacher_submitted_' + request.resource.data.requestId
+            && request.resource.data.assignmentId is string
+            && request.resource.data.requestId is string
+            && ownsAssignment(request.resource.data.assignmentId)
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.teacherSubmittedBy == uid
+            && request.resource.data.helperUid == getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.helperUid
+            && request.resource.data.keys().hasOnly(['eventType', 'assignmentId', 'requestId', 'helperUid', 'teacherUid', 'createdAt'])
+          ) || (
+            isOwner(uid)
+            && request.resource.data.eventType == 'help-thanked'
+            && request.resource.data.requesterUid == uid
+            && eventId == 'help_thanked_' + request.resource.data.requestId
+            && request.resource.data.assignmentId is string
+            && request.resource.data.requestId is string
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.status == 'acknowledged'
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequestOwners/$(request.resource.data.requestId)).data.requesterUid == uid
+            && request.resource.data.helperUid == getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.helperUid
+            && request.resource.data.keys().hasOnly(['eventType', 'assignmentId', 'requestId', 'requesterUid', 'helperUid', 'createdAt'])
+          );
+
+        allow update, delete: if false;
+      }
 
       match /submissions/{assignmentId} {
         allow read: if isOwner(uid);
@@ -204,6 +266,183 @@ service cloud.firestore {
         allow delete: if ownsAssignment(assignmentId);
       }
 
+      // Peer Help requests expose the question and workflow state, never the requester's UID/name.
+      match /helpRequests/{requestId} {
+        allow get: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, requestId)
+          || (signedIn() && resource.data.helperUid == request.auth.uid
+              && resource.data.status in ['helping', 'submitted', 'acknowledged'])
+          || (isCompletedPeer(assignmentId) && resource.data.status == 'pending');
+
+        allow list: if ownsAssignment(assignmentId)
+          || (isCompletedPeer(assignmentId) && resource.data.status == 'pending');
+
+        allow create: if signedIn()
+          && isAssignmentMember(assignmentId, request.auth.uid)
+          && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'in-progress'
+          && (
+            !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data)
+            || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+          )
+          && request.resource.data.keys().hasOnly([
+            'requestId', 'question', 'status', 'slideIndex', 'workKey', 'helperUid',
+            'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.requestId == requestId
+          && request.resource.data.question is string
+          && request.resource.data.question.size() > 0
+          && request.resource.data.question.size() <= 500
+          && request.resource.data.status == 'pending'
+          && request.resource.data.helperUid == null
+          && request.resource.data.slideIndex is int
+          && request.resource.data.workKey is string
+          && getAfter(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid
+          && getAfter(helpLockPath(assignmentId, request.resource.data.workKey)).data.requestId == requestId;
+
+        allow update: if (
+            signedIn()
+            && isCompletedPeer(assignmentId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'helping'
+            && request.resource.data.helperUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'helperUid', 'claimedAt', 'updatedAt'])
+          ) || (
+            signedIn()
+            && resource.data.status == 'helping'
+            && resource.data.helperUid == request.auth.uid
+            && request.resource.data.status == 'helping'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActivityAt', 'updatedAt'])
+          ) || (
+            signedIn()
+            && resource.data.status == 'helping'
+            && resource.data.helperUid == request.auth.uid
+            && request.resource.data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/help_submitted_$(requestId)).data.requestId == requestId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt'])
+          ) || (
+            isHelpRequester(assignmentId, requestId)
+            && resource.data.status == 'submitted'
+            && request.resource.data.status == 'acknowledged'
+            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/help_thanked_$(requestId)).data.requestId == requestId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'thankedAt', 'updatedAt'])
+          ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status == 'helping'
+            && request.resource.data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt', 'teacherSubmittedBy', 'teacherSubmittedAt'])
+            && request.resource.data.teacherSubmittedBy == request.auth.uid
+            && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/peerHelpEvents/teacher_submitted_$(requestId)).data.requestId == requestId
+          ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status in ['pending', 'helping']
+            && request.resource.data.status == 'expired'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'expiredAt', 'updatedAt'])
+          );
+
+        allow delete: if ownsAssignment(assignmentId)
+          || (isHelpRequester(assignmentId, requestId) && resource.data.status == 'pending');
+      }
+
+      // Opaque lock key allows Firestore rules to block requester writes while a helper is active,
+      // without exposing the requester's UID to the helper.
+      match /helpLocks/{workKey} {
+        allow get: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, resource.data.requestId)
+          || (isCompletedPeer(assignmentId) && resource.data.status == 'pending')
+          || (signedIn() && resource.data.helperUid == request.auth.uid
+              && resource.data.status in ['helping', 'submitted']);
+
+        allow list: if false;
+
+        allow create: if signedIn()
+          && isAssignmentMember(assignmentId, request.auth.uid)
+          && request.resource.data.keys().hasOnly(['requestId', 'workKey', 'status', 'createdAt', 'updatedAt'])
+          && request.resource.data.workKey == workKey
+          && request.resource.data.status == 'pending'
+          && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(request.resource.data.requestId)).data.workKey == workKey
+          && getAfter(helpOwnerPath(assignmentId, request.resource.data.requestId)).data.requesterUid == request.auth.uid;
+
+        allow update: if (
+            isCompletedPeer(assignmentId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'helping'
+            && request.resource.data.helperUid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'helping'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.helperUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'helperUid', 'updatedAt'])
+          ) || (
+            signedIn()
+            && resource.data.status == 'helping'
+            && resource.data.helperUid == request.auth.uid
+            && request.resource.data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status == 'helping'
+            && request.resource.data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) || (
+            isHelpRequester(assignmentId, resource.data.requestId)
+            && resource.data.status == 'submitted'
+            && request.resource.data.status == 'acknowledged'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'acknowledged'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status in ['pending', 'helping']
+            && request.resource.data.status == 'expired'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'expired'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          );
+
+        allow delete: if ownsAssignment(assignmentId);
+      }
+
+      // Private mapping lets the requester and teacher identify the request without exposing identity to peers.
+      match /helpRequestOwners/{requestId} {
+        allow get, list: if ownsAssignment(assignmentId)
+          || (signedIn() && resource.data.requesterUid == request.auth.uid);
+
+        allow create: if signedIn()
+          && isAssignmentMember(assignmentId, request.auth.uid)
+          && request.resource.data.keys().hasOnly(['requesterUid', 'createdAt'])
+          && request.resource.data.requesterUid == request.auth.uid
+          && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.requestId == requestId;
+
+        allow update: if false;
+        allow delete: if ownsAssignment(assignmentId)
+          || (signedIn() && resource.data.requesterUid == request.auth.uid
+              && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.status in ['pending', 'expired']);
+      }
+
+      // Shared annotation canvas is accessible only to the requester, assigned helper, and teacher.
+      match /helpRequests/{requestId}/slides/{slideId} {
+        function requestDoc() {
+          return /databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId);
+        }
+        allow read: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, requestId)
+          || (signedIn()
+              && get(requestDoc()).data.helperUid == request.auth.uid
+              && get(requestDoc()).data.status in ['helping', 'submitted', 'acknowledged']);
+
+        allow create, update: if (
+            isHelpRequester(assignmentId, requestId)
+            && getAfter(requestDoc()).data.status == 'pending'
+          ) || (
+            signedIn()
+            && get(requestDoc()).data.helperUid == request.auth.uid
+            && get(requestDoc()).data.status == 'helping'
+          ) || (
+            ownsAssignment(assignmentId)
+            && get(requestDoc()).data.status == 'helping'
+          );
+        allow delete: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, requestId);
+      }
+
       match /students/{studentUid} {
         allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
 
@@ -225,16 +464,46 @@ service cloud.firestore {
             isOwner(studentUid)
             && request.resource.data.uid == resource.data.uid
             && request.resource.data.sessionCode == resource.data.sessionCode
+            // A student cannot remove or replace the active lock key while a help request is open.
+            && (
+              !('activeHelpLockKey' in resource.data)
+              || (
+                'activeHelpLockKey' in request.resource.data
+                && (
+                  request.resource.data.activeHelpLockKey == resource.data.activeHelpLockKey
+                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+                )
+              )
+            )
           ) || ownsAssignment(assignmentId);
 
-        allow delete: if ownsAssignment(assignmentId) || isOwner(studentUid);
+        allow delete: if ownsAssignment(assignmentId)
+          || (
+            isOwner(studentUid)
+            && (
+              !('activeHelpLockKey' in resource.data)
+              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+            )
+          );
 
         match /slides/{slideId} {
           allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
           allow create, update: if (
-              isOwner(studentUid) && isAssignmentMember(assignmentId, studentUid)
+              isOwner(studentUid)
+              && isAssignmentMember(assignmentId, studentUid)
+              && (
+                !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
+                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status != 'helping'
+              )
             ) || ownsAssignment(assignmentId);
-          allow delete: if ownsAssignment(assignmentId) || isOwner(studentUid);
+          allow delete: if ownsAssignment(assignmentId)
+            || (
+              isOwner(studentUid)
+              && (
+                !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
+                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+              )
+            );
         }
       }
     }
