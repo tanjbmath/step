@@ -26,6 +26,22 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid));
     }
 
+    function helpOwnerPath(assignmentId, requestId) {
+      return /databases/$(database)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId);
+    }
+
+    function isHelpRequester(assignmentId, requestId) {
+      return signedIn()
+        && exists(helpOwnerPath(assignmentId, requestId))
+        && get(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid;
+    }
+
+    function isCompletedPeer(assignmentId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid))
+        && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'completed';
+    }
+
     match /users/{uid} {
       allow read: if isOwner(uid);
 
@@ -202,6 +218,112 @@ service cloud.firestore {
           );
 
         allow delete: if ownsAssignment(assignmentId);
+      }
+
+      // Peer Help requests expose the question and workflow state, never the requester's UID/name.
+      match /helpRequests/{requestId} {
+        allow get: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, requestId)
+          || (signedIn() && resource.data.helperUid == request.auth.uid
+              && resource.data.status in ['helping', 'submitted', 'acknowledged'])
+          || (isCompletedPeer(assignmentId) && resource.data.status == 'pending');
+
+        allow list: if ownsAssignment(assignmentId)
+          || (isCompletedPeer(assignmentId) && resource.data.status == 'pending');
+
+        allow create: if signedIn()
+          && isAssignmentMember(assignmentId, request.auth.uid)
+          && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'in-progress'
+          && request.resource.data.keys().hasOnly([
+            'requestId', 'question', 'status', 'slideIndex', 'workKey', 'helperUid',
+            'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.requestId == requestId
+          && request.resource.data.question is string
+          && request.resource.data.question.size() > 0
+          && request.resource.data.question.size() <= 500
+          && request.resource.data.status == 'pending'
+          && request.resource.data.helperUid == null
+          && request.resource.data.slideIndex is int
+          && request.resource.data.workKey is string
+          && getAfter(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid;
+
+        allow update: if (
+            signedIn()
+            && isCompletedPeer(assignmentId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'helping'
+            && request.resource.data.helperUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'helperUid', 'claimedAt', 'updatedAt'])
+          ) || (
+            signedIn()
+            && resource.data.status == 'helping'
+            && resource.data.helperUid == request.auth.uid
+            && request.resource.data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt'])
+          ) || (
+            isHelpRequester(assignmentId, requestId)
+            && resource.data.status == 'submitted'
+            && request.resource.data.status == 'acknowledged'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'thankedAt', 'updatedAt'])
+          ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status == 'helping'
+            && request.resource.data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt', 'teacherSubmittedBy', 'teacherSubmittedAt'])
+            && request.resource.data.teacherSubmittedBy == request.auth.uid
+          ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status in ['pending', 'helping']
+            && request.resource.data.status == 'expired'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'expiredAt', 'updatedAt'])
+          );
+
+        allow delete: if ownsAssignment(assignmentId)
+          || (isHelpRequester(assignmentId, requestId) && resource.data.status == 'pending');
+      }
+
+      // Private mapping lets the requester and teacher identify the request without exposing identity to peers.
+      match /helpRequestOwners/{requestId} {
+        allow get, list: if ownsAssignment(assignmentId)
+          || (signedIn() && resource.data.requesterUid == request.auth.uid);
+
+        allow create: if signedIn()
+          && isAssignmentMember(assignmentId, request.auth.uid)
+          && request.resource.data.keys().hasOnly(['requesterUid', 'createdAt'])
+          && request.resource.data.requesterUid == request.auth.uid
+          && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.requestId == requestId;
+
+        allow update: if false;
+        allow delete: if ownsAssignment(assignmentId)
+          || (signedIn() && resource.data.requesterUid == request.auth.uid
+              && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.status in ['pending', 'expired']);
+      }
+
+      // Shared annotation canvas is accessible only to the requester, assigned helper, and teacher.
+      match /helpRequests/{requestId}/slides/{slideId} {
+        function requestDoc() {
+          return /databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId);
+        }
+        allow read: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, requestId)
+          || (signedIn()
+              && get(requestDoc()).data.helperUid == request.auth.uid
+              && get(requestDoc()).data.status in ['helping', 'submitted', 'acknowledged']);
+
+        allow create, update: if (
+            isHelpRequester(assignmentId, requestId)
+            && get(requestDoc()).data.status == 'pending'
+          ) || (
+            signedIn()
+            && get(requestDoc()).data.helperUid == request.auth.uid
+            && get(requestDoc()).data.status == 'helping'
+          ) || (
+            ownsAssignment(assignmentId)
+            && get(requestDoc()).data.status == 'helping'
+          );
+        allow delete: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, requestId);
       }
 
       match /students/{studentUid} {
