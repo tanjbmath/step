@@ -2572,6 +2572,14 @@ async function loadAssignmentProgressCounts(assignment) {
               teacherSubmittedAt: now
             });
             transaction.update(lockRef, { status: 'submitted', updatedAt: now });
+            transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`teacher_submitted_${requestId}`), {
+              eventType: 'teacher-submitted-on-behalf',
+              assignmentId: currentAssignmentId,
+              requestId,
+              helperUid: doc.data().helperUid,
+              teacherUid: signedInUser.uid,
+              createdAt: now
+            });
           });
         } else {
           await db.runTransaction(async transaction => {
@@ -2584,6 +2592,13 @@ async function loadAssignmentProgressCounts(assignment) {
             if (!lockDoc.exists || lockDoc.data().status !== 'helping') throw new Error('The session lock is no longer active.');
             transaction.update(ref, { status: 'submitted', submittedAt: now, updatedAt: now });
             transaction.update(lockRef, { status: 'submitted', updatedAt: now });
+            transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`help_submitted_${requestId}`), {
+              eventType: 'help-submitted',
+              assignmentId: currentAssignmentId,
+              requestId,
+              helperUid: signedInUser.uid,
+              createdAt: now
+            });
           });
         }
         if (!asTeacher) {
@@ -2608,10 +2623,21 @@ async function loadAssignmentProgressCounts(assignment) {
     async function acknowledgePeerHelp(requestId) {
       if (!signedInUser || !currentAssignmentId) return;
       try {
-        await peerHelpRequestRef(requestId).update({
-          status: 'acknowledged',
-          thankedAt: firebase.firestore.FieldValue.serverTimestamp(),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        const ref = peerHelpRequestRef(requestId);
+        const now = firebase.firestore.FieldValue.serverTimestamp();
+        await db.runTransaction(async transaction => {
+          const requestDoc = await transaction.get(ref);
+          if (!requestDoc.exists || requestDoc.data().status !== 'submitted') throw new Error('This help has already been acknowledged or is not ready.');
+          const helperUid = requestDoc.data().helperUid;
+          transaction.update(ref, { status: 'acknowledged', thankedAt: now, updatedAt: now });
+          transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`help_thanked_${requestId}`), {
+            eventType: 'help-thanked',
+            assignmentId: currentAssignmentId,
+            requestId,
+            requesterUid: signedInUser.uid,
+            helperUid,
+            createdAt: now
+          });
         });
         showToast('Thanks recorded. This help event is now eligible for achievement tracking.', 'success');
       } catch (err) {
