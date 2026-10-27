@@ -195,6 +195,7 @@
     let unsubOwnedHelpRequests = null;
     let ownedHelpRequestListeners = [];
     let unsubTeacherHelpRequests = null;
+    let unsubActiveHelpSession = null;
     const copiedHelpResults = new Set();
     const PEER_HELP_COLOUR = '#e11d48';
 
@@ -2513,6 +2514,7 @@ async function loadAssignmentProgressCounts(assignment) {
         activeHelpRequestData = snapshot.data();
         activeHelpMode = 'helper';
         currentSlideIndex = Number(activeHelpRequestData.slideIndex || 0);
+        watchActiveHelpSession(requestId);
         document.getElementById('workspaceSubtext').textContent = 'Helping anonymously • Use the locked rose-colour pen, then Submit Help';
         updatePeerHelpControls();
         setupSlideWorkspace();
@@ -2576,6 +2578,7 @@ async function loadAssignmentProgressCounts(assignment) {
           });
         }
         if (!asTeacher) {
+          if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
           activeHelpRequestId = null;
           activeHelpRequestData = null;
           activeHelpMode = null;
@@ -2626,6 +2629,29 @@ async function loadAssignmentProgressCounts(assignment) {
       } catch (err) {
         showToast('Could not expire request: ' + err.message, 'error');
       }
+    }
+
+    function watchActiveHelpSession(requestId) {
+      if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
+      if (!db || !requestId) return;
+      unsubActiveHelpSession = peerHelpRequestRef(requestId).onSnapshot(snapshot => {
+        if (!snapshot.exists || activeHelpRequestId !== requestId || activeHelpMode !== 'helper') return;
+        const status = snapshot.data().status;
+        if (status === 'helping') return;
+        if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
+        activeHelpRequestId = null;
+        activeHelpRequestData = null;
+        activeHelpMode = null;
+        updatePeerHelpControls();
+        loadCurrentSlideData();
+        if (status === 'submitted') {
+          document.getElementById('workspaceSubtext').textContent = 'Help session finalised. Your own assignment canvas is restored.';
+          showToast('The help session was finalised. Your annotation workspace is now read-only again.', 'info');
+        } else if (status === 'expired') {
+          document.getElementById('workspaceSubtext').textContent = 'Help session released by the teacher.';
+          showToast('The teacher released this help session.', 'info');
+        }
+      }, err => console.warn('Active Peer Help session listener:', err));
     }
 
     function startTeacherHelpMonitor(assignmentId) {
