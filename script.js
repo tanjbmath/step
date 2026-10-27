@@ -195,6 +195,10 @@
     const workspaceScreen = document.getElementById('workspaceScreen');
     const roleBadge = document.getElementById('roleBadge');
     const resetRoleBtn = document.getElementById('resetRoleBtn');
+    const peersBtn = document.getElementById('peersBtn');
+    const peersModal = document.getElementById('peersModal');
+    const peersList = document.getElementById('peersList');
+    const peersCount = document.getElementById('peersCount');
 
     const mainCanvas = document.getElementById('mainCanvas');
     const ctx = mainCanvas.getContext('2d');
@@ -219,6 +223,79 @@
       studentJoinScreen.classList.remove('hidden');
     });
     resetRoleBtn.addEventListener('click', resetRole);
+    peersBtn.addEventListener('click', openPeersDirectory);
+    document.getElementById('closePeersBtn').addEventListener('click', closePeersDirectory);
+    peersModal.addEventListener('click', event => {
+      if (event.target === peersModal) closePeersDirectory();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !peersModal.classList.contains('hidden')) closePeersDirectory();
+    });
+
+    function closePeersDirectory() {
+      peersModal.classList.add('hidden');
+      peersBtn.focus();
+    }
+
+    async function openPeersDirectory() {
+      if (!signedInUser || !db) {
+        showToast('Sign in to view the student directory.', 'error');
+        return;
+      }
+      peersModal.classList.remove('hidden');
+      peersCount.textContent = 'Loading students…';
+      peersList.innerHTML = '<p class="text-sm text-slate-500">Loading student directory…</p>';
+      document.getElementById('closePeersBtn').focus();
+
+      try {
+        // Only render names and reserved badge slots; never display emails or other profile fields.
+        const snapshot = await db.collection('users').get();
+        const peers = snapshot.docs
+          .map(doc => ({ uid: doc.id, ...doc.data() }))
+          .filter(profile => profile.uid !== signedInUser.uid && profile.role !== 'teacher')
+          .map(profile => ({
+            name: (typeof profile.studentName === 'string' && profile.studentName.trim())
+              || (typeof profile.displayName === 'string' && profile.displayName.trim())
+              || 'Student'
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+        peersCount.textContent = peers.length + (peers.length === 1 ? ' student' : ' students');
+        peersList.innerHTML = '';
+        if (!peers.length) {
+          peersList.innerHTML = '<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">No other student accounts found yet.</div>';
+          return;
+        }
+
+        peers.forEach(peer => {
+          const row = document.createElement('div');
+          row.className = 'flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3';
+          const avatar = document.createElement('div');
+          avatar.className = 'w-10 h-10 shrink-0 rounded-full bg-sky-50 text-sky-700 flex items-center justify-center font-bold';
+          avatar.textContent = peer.name.trim().charAt(0).toLocaleUpperCase() || '?';
+          const name = document.createElement('div');
+          name.className = 'min-w-0 flex-1 font-semibold text-slate-800 break-words';
+          name.textContent = peer.name;
+          const badgeArea = document.createElement('div');
+          badgeArea.className = 'flex items-center gap-1.5 shrink-0';
+          badgeArea.setAttribute('aria-label', 'Reserved achievement badge spaces');
+          badgeArea.title = 'Achievement badges coming in a future update';
+          for (let i = 0; i < 3; i++) {
+            const slot = document.createElement('span');
+            slot.className = 'w-7 h-7 rounded-full border border-dashed border-slate-300 bg-slate-50 inline-flex items-center justify-center text-slate-300 text-[10px]';
+            slot.innerHTML = '<i class="fa-solid fa-award"></i>';
+            slot.setAttribute('aria-hidden', 'true');
+            badgeArea.appendChild(slot);
+          }
+          row.append(avatar, name, badgeArea);
+          peersList.appendChild(row);
+        });
+      } catch (err) {
+        console.error('Peers directory load failed:', err);
+        peersCount.textContent = 'Could not load directory';
+        peersList.innerHTML = '<div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">S.T.E.P. could not read the student directory. Your Firestore security rules must allow signed-in users to read the directory records. No account details have been changed.</div>';
+      }
+    }
 
     async function switchRole(role, options = {}) {
       if (!signedInUser) { showToast('Sign in with Google first.', 'error'); return; }
@@ -245,11 +322,13 @@
       resetRoleBtn.classList.remove('hidden');
 
       if (role === 'teacher') {
+        peersBtn.classList.add('hidden');
         roleBadge.textContent = "Teacher Mode";
         roleBadge.className = "bg-indigo-800 text-indigo-100 px-3 py-1 rounded-full font-medium shadow-inner";
         teacherDashboard.classList.remove('hidden');
         renderTeacherAssignments();
       } else {
+        peersBtn.classList.remove('hidden');
         roleBadge.textContent = "Student Mode";
         roleBadge.className = "bg-emerald-800 text-emerald-100 px-3 py-1 rounded-full font-medium shadow-inner";
         if (options.showJoinForm) {
@@ -287,6 +366,8 @@
       
       roleSelectionScreen.classList.remove('hidden');
       resetRoleBtn.classList.add('hidden');
+      peersBtn.classList.add('hidden');
+      closePeersDirectory();
       roleBadge.textContent = accountRole === 'teacher' ? 'Teacher Account' : 'Student Account';
       roleBadge.className = accountRole === 'teacher'
         ? 'bg-indigo-800 text-indigo-100 px-3 py-1 rounded-full font-medium shadow-inner'
