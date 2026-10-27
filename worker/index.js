@@ -100,6 +100,7 @@ export default { async fetch(request,env){
     "HINT LEVEL: "+hintLevel+" of 3","REQUEST: "+modeInstructions[mode],
     "Start with 'Let's start with one small step.' only if you immediately follow it with a concrete, question-specific mathematical action. Never stop after that sentence."
   ].join("\n\n");
+  /** @type {Array<{text?: string, inline_data?: {mime_type: string, data: string}}>} */
   const parts=[{text:prompt}];
   if(imageDataUrl){const comma=imageDataUrl.indexOf(",");parts.push({inline_data:{mime_type:imageDataUrl.slice(5,imageDataUrl.indexOf(";")),data:imageDataUrl.slice(comma+1)}});}
   try{
