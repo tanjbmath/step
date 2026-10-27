@@ -2230,7 +2230,7 @@ async function loadAssignmentProgressCounts(assignment) {
       const textTool = document.getElementById('toolText');
       const penTool = document.getElementById('toolPen');
       const lockTools = helperMode || teacherMode || requesterHelpLock;
-      ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn'].forEach(id => {
+      ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn', 'prevSlideBtn', 'nextSlideBtn'].forEach(id => {
         const control = document.getElementById(id);
         if (control) control.disabled = requesterHelpLock || ((helperMode || teacherMode) && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
       });
@@ -2639,6 +2639,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const status = snapshot.data().status;
         if (status === 'helping') return;
         if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
+        isDrawing = false;
         activeHelpRequestId = null;
         activeHelpRequestData = null;
         activeHelpMode = null;
