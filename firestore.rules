@@ -30,6 +30,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId);
     }
 
+    function helpLockPath(assignmentId, workKey) {
+      return /databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(workKey);
+    }
+
     function isHelpRequester(assignmentId, requestId) {
       return signedIn()
         && exists(helpOwnerPath(assignmentId, requestId))
@@ -246,7 +250,8 @@ service cloud.firestore {
           && request.resource.data.helperUid == null
           && request.resource.data.slideIndex is int
           && request.resource.data.workKey is string
-          && getAfter(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid;
+          && getAfter(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid
+          && getAfter(helpLockPath(assignmentId, request.resource.data.workKey)).data.requestId == requestId;
 
         allow update: if (
             signedIn()
@@ -281,6 +286,51 @@ service cloud.firestore {
 
         allow delete: if ownsAssignment(assignmentId)
           || (isHelpRequester(assignmentId, requestId) && resource.data.status == 'pending');
+      }
+
+      // Opaque lock key allows Firestore rules to block requester writes while a helper is active,
+      // without exposing the requester's UID to the helper.
+      match /helpLocks/{workKey} {
+        allow get: if ownsAssignment(assignmentId)
+          || isHelpRequester(assignmentId, resource.data.requestId)
+          || (isCompletedPeer(assignmentId) && resource.data.status == 'pending')
+          || (signedIn() && resource.data.helperUid == request.auth.uid
+              && resource.data.status in ['helping', 'submitted']);
+
+        allow list: if false;
+
+        allow create: if signedIn()
+          && isAssignmentMember(assignmentId, request.auth.uid)
+          && request.resource.data.keys().hasOnly(['requestId', 'workKey', 'status', 'createdAt', 'updatedAt'])
+          && request.resource.data.workKey == workKey
+          && request.resource.data.status == 'pending'
+          && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(request.resource.data.requestId)).data.workKey == workKey
+          && getAfter(helpOwnerPath(assignmentId, request.resource.data.requestId)).data.requesterUid == request.auth.uid;
+
+        allow update: if (
+            isCompletedPeer(assignmentId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'helping'
+            && request.resource.data.helperUid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'helping'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.helperUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'helperUid', 'updatedAt'])
+          ) || (
+            signedIn()
+            && resource.data.status == 'helping'
+            && resource.data.helperUid == request.auth.uid
+            && request.resource.data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status in ['pending', 'helping']
+            && request.resource.data.status == 'expired'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'expired'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          );
+
+        allow delete: if ownsAssignment(assignmentId);
       }
 
       // Private mapping lets the requester and teacher identify the request without exposing identity to peers.
@@ -354,7 +404,12 @@ service cloud.firestore {
         match /slides/{slideId} {
           allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
           allow create, update: if (
-              isOwner(studentUid) && isAssignmentMember(assignmentId, studentUid)
+              isOwner(studentUid)
+              && isAssignmentMember(assignmentId, studentUid)
+              && (
+                !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
+                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status != 'helping'
+              )
             ) || ownsAssignment(assignmentId);
           allow delete: if ownsAssignment(assignmentId) || isOwner(studentUid);
         }
