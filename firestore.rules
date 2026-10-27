@@ -77,6 +77,48 @@ service cloud.firestore {
 
       allow delete: if false;
 
+      match /peerHelpEvents/{eventId} {
+        allow read: if isOwner(uid) || isTeacher();
+
+        allow create: if (
+            isOwner(uid)
+            && request.resource.data.eventType == 'help-submitted'
+            && request.resource.data.helperUid == uid
+            && eventId == 'help_submitted_' + request.resource.data.requestId
+            && request.resource.data.assignmentId is string
+            && request.resource.data.requestId is string
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.helperUid == uid
+            && request.resource.data.keys().hasOnly(['eventType', 'assignmentId', 'requestId', 'helperUid', 'createdAt'])
+          ) || (
+            isOwner(uid)
+            && isTeacher()
+            && request.resource.data.eventType == 'teacher-submitted-on-behalf'
+            && request.resource.data.teacherUid == uid
+            && eventId == 'teacher_submitted_' + request.resource.data.requestId
+            && request.resource.data.assignmentId is string
+            && request.resource.data.requestId is string
+            && ownsAssignment(request.resource.data.assignmentId)
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.teacherSubmittedBy == uid
+            && request.resource.data.helperUid == getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.helperUid
+            && request.resource.data.keys().hasOnly(['eventType', 'assignmentId', 'requestId', 'helperUid', 'teacherUid', 'createdAt'])
+          ) || (
+            isOwner(uid)
+            && request.resource.data.eventType == 'help-thanked'
+            && request.resource.data.requesterUid == uid
+            && eventId == 'help_thanked_' + request.resource.data.requestId
+            && request.resource.data.assignmentId is string
+            && request.resource.data.requestId is string
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.status == 'acknowledged'
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequestOwners/$(request.resource.data.requestId)).data.requesterUid == uid
+            && request.resource.data.helperUid == getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/helpRequests/$(request.resource.data.requestId)).data.helperUid
+            && request.resource.data.keys().hasOnly(['eventType', 'assignmentId', 'requestId', 'requesterUid', 'helperUid', 'createdAt'])
+          );
+
+        allow update, delete: if false;
+      }
+
       match /submissions/{assignmentId} {
         allow read: if isOwner(uid);
         allow create: if isOwner(uid)
