@@ -2254,6 +2254,14 @@ async function loadAssignmentProgressCounts(assignment) {
       if (audience === 'teacher' && !teacherList) return;
       const target = audience === 'teacher' ? teacherList : list;
       if (!target) return;
+      if (audience !== 'teacher') {
+        const badge = document.getElementById('peerHelpCountBadge');
+        if (badge) {
+          const count = requests.filter(item => item.status === 'pending').length;
+          badge.textContent = count === 1 ? '1 new help request' : `${count} new help requests`;
+          badge.classList.toggle('hidden', count === 0);
+        }
+      }
       target.querySelectorAll('[data-peer-request]').forEach(node => node.remove());
       const oldEmpty = target.querySelector('[data-peer-help-empty]');
       if (oldEmpty) oldEmpty.remove();
@@ -2283,6 +2291,9 @@ async function loadAssignmentProgressCounts(assignment) {
         status.textContent = audience === 'teacher' && item.status === 'helping'
           ? 'Someone is helping • Active session'
           : (item.status || 'pending').replace(/-/g, ' ').replace(/^./, x => x.toUpperCase());
+        if (audience === 'teacher' && item.status === 'helping') {
+          status.className = 'inline-flex mt-2 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-1 text-xs font-bold peer-help-pulse';
+        }
         if (audience === 'teacher' && item.requesterLabel) {
           const requester = document.createElement('p');
           requester.className = 'text-xs text-slate-600 mt-1';
