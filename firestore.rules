@@ -41,8 +41,18 @@ service cloud.firestore {
             && request.resource.data.role == resource.data.role)
           || (!('role' in resource.data) && !('role' in request.resource.data))
         )
+        // Once chosen, the canonical student name and its timestamp cannot be changed or removed.
+        && (
+          !('studentName' in resource.data)
+          || (
+            'studentName' in request.resource.data
+            && request.resource.data.studentName == resource.data.studentName
+            && request.resource.data.studentNameSetAt == resource.data.studentNameSetAt
+          )
+        )
         && request.resource.data.keys().hasOnly([
-          'displayName', 'email', 'photoURL', 'lastSignInAt', 'role'
+          'displayName', 'email', 'photoURL', 'lastSignInAt', 'role',
+          'studentName', 'studentNameSetAt'
         ]);
 
       allow delete: if false;
@@ -68,6 +78,27 @@ service cloud.firestore {
           );
         allow delete: if isOwner(uid);
       }
+    }
+
+    // Public, minimal student directory. Documents contain only a chosen display name and timestamp.
+    match /peerDirectory/{uid} {
+      allow read: if signedIn();
+
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['studentName', 'updatedAt'])
+        && request.resource.data.studentName is string
+        && request.resource.data.studentName.size() > 0
+        && request.resource.data.studentName.size() <= 80;
+
+      // A chosen name is immutable from the client; only its timestamp may be refreshed.
+      allow update: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['studentName', 'updatedAt'])
+        && request.resource.data.studentName == resource.data.studentName
+        && request.resource.data.studentName is string
+        && request.resource.data.studentName.size() > 0
+        && request.resource.data.studentName.size() <= 80;
+
+      allow delete: if false;
     }
 
     // Collection-group reads are limited to the signed-in student's own email.
