@@ -200,6 +200,7 @@
     let unsubActiveHelpSession = null;
     let peerHelpListeningAssignmentId = null;
     const copiedHelpResults = new Set();
+    const copyingHelpResults = new Set();
     const PEER_HELP_COLOUR = '#e11d48';
 
     let currentSlideIndex = 0;
@@ -2407,7 +2408,8 @@ async function loadAssignmentProgressCounts(assignment) {
               // to their original slide; otherwise a quick new stroke could be overwritten.
               requesterHelpLock = true;
               updatePeerHelpControls();
-              if (!copiedHelpResults.has(requestDoc.id)) {
+              if (!copiedHelpResults.has(requestDoc.id) && !copyingHelpResults.has(requestDoc.id)) {
+                copyingHelpResults.add(requestDoc.id);
                 copiedHelpResults.add(requestDoc.id);
                 try {
                   const slideIndex = Number(data.slideIndex || 0);
@@ -2424,9 +2426,13 @@ async function loadAssignmentProgressCounts(assignment) {
                   console.error('Could not apply peer annotations to requester canvas:', err);
                   showToast('Help was submitted, but the annotated canvas could not be copied. You can continue working; inform your teacher if needed.', 'error');
                 } finally {
+                  copyingHelpResults.delete(requestDoc.id);
                   requesterHelpLock = false;
                   updatePeerHelpControls();
                 }
+              } else if (copyingHelpResults.has(requestDoc.id)) {
+                requesterHelpLock = true;
+                updatePeerHelpControls();
               } else {
                 requesterHelpLock = false;
                 updatePeerHelpControls();
