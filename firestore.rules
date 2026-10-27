@@ -280,6 +280,10 @@ service cloud.firestore {
         allow create: if signedIn()
           && isAssignmentMember(assignmentId, request.auth.uid)
           && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'in-progress'
+          && (
+            !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data)
+            || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+          )
           && request.resource.data.keys().hasOnly([
             'requestId', 'question', 'status', 'slideIndex', 'workKey', 'helperUid',
             'createdAt', 'updatedAt'
@@ -378,6 +382,12 @@ service cloud.firestore {
             && resource.data.status == 'helping'
             && request.resource.data.status == 'submitted'
             && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) || (
+            isHelpRequester(assignmentId, resource.data.requestId)
+            && resource.data.status == 'submitted'
+            && request.resource.data.status == 'acknowledged'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'acknowledged'
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
           ) || (
             ownsAssignment(assignmentId)
