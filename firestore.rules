@@ -142,7 +142,8 @@ service cloud.firestore {
             && request.resource.data.status in ['completed', 'in-progress']
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewOutcome'])
           );
-        allow delete: if isOwner(uid);
+        // The assignment owner may remove each student's history record during assignment deletion.
+        allow delete: if isOwner(uid) || ownsAssignment(assignmentId);
       }
     }
 
@@ -489,7 +490,9 @@ service cloud.firestore {
           || (
             isOwner(studentUid)
             && (
-              !('activeHelpLockKey' in resource.data)
+              // If the parent assignment has already been removed, allow cleanup of orphaned work.
+              !exists(/databases/$(database)/documents/assignments/$(assignmentId))
+              || !('activeHelpLockKey' in resource.data)
               || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
             )
           );
@@ -508,7 +511,9 @@ service cloud.firestore {
             || (
               isOwner(studentUid)
               && (
-                !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
+                // Orphaned slides can be removed after the teacher deletes the parent assignment.
+                !exists(/databases/$(database)/documents/assignments/$(assignmentId))
+                || !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
                 || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
               )
             );
