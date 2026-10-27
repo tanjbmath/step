@@ -166,3 +166,15 @@
     min-height: fit-content;
   }
 }
+
+
+/* Peer Help status and session visibility */
+.peer-help-pulse {
+  animation: peerHelpPulse 1.5s ease-in-out infinite;
+}
+@keyframes peerHelpPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .18); }
+  50% { box-shadow: 0 0 0 5px rgba(245, 158, 11, .32); }
+}
+.peer-help-request-card { border: 1px solid #dbeafe; border-radius: .75rem; padding: .75rem; background: #f8fbff; }
+.peer-help-request-card[data-status="helping"] { border-color: #fbbf24; background: #fffbeb; }
