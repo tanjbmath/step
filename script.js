@@ -2646,7 +2646,11 @@ async function loadAssignmentProgressCounts(assignment) {
           const requestDoc = await transaction.get(ref);
           if (!requestDoc.exists || requestDoc.data().status !== 'submitted') throw new Error('This help has already been acknowledged or is not ready.');
           const helperUid = requestDoc.data().helperUid;
+          const lockRef = peerHelpLockRef(requestDoc.data().workKey);
+          const lockDoc = await transaction.get(lockRef);
+          if (!lockDoc.exists || lockDoc.data().status !== 'submitted') throw new Error('The help session lock is not ready to close.');
           transaction.update(ref, { status: 'acknowledged', thankedAt: now, updatedAt: now });
+          transaction.update(lockRef, { status: 'acknowledged', updatedAt: now });
           transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`help_thanked_${requestId}`), {
             eventType: 'help-thanked',
             assignmentId: currentAssignmentId,
