@@ -106,7 +106,16 @@ export default { async fetch(request,env){
       body:JSON.stringify({system_instruction:{parts:[{text:"You are a scaffold-first Mathematics tutor. Do not give full solutions when a hint is requested."}]},contents:[{role:"user",parts}],generationConfig:{maxOutputTokens:240,temperature:0.3}})
     });
     const apiData=await apiResponse.json().catch(()=>({}));
-    if(!apiResponse.ok){const status=apiResponse.status===429?429:502;return jsonResponse({error:status===429?"Gemini free-tier quota reached. Check AI Studio usage limits and retry later.":"Gemini could not answer. Check model availability and API secret."},status,origin);}
+    if(!apiResponse.ok){
+      const apiError=apiData?.error||{};
+      const safeDetail=String(apiError.message||apiError.status||"No error details returned").slice(0,500);
+      console.error("Gemini API request failed",JSON.stringify({httpStatus:apiResponse.status,apiStatus:apiError.status||null,detail:safeDetail,model}));
+      const status=apiResponse.status===429?429:502;
+      const message=apiResponse.status===429
+        ?"Gemini free-tier quota reached. Check AI Studio usage limits and retry later."
+        :"Gemini API error (HTTP "+apiResponse.status+"): "+safeDetail;
+      return jsonResponse({error:message},status,origin);
+    }
     const hint=(apiData.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("\n").trim().slice(0,1800);
     if(!hint)return jsonResponse({error:"AI tutor returned an empty hint. Try again."},502,origin);
     return jsonResponse({hint,hintLevel,mode},200,origin);
