@@ -61,7 +61,7 @@
     }
 
     // Set this to the deployed Cloudflare Worker URL after deployment.
-    const STEP_AI_TUTOR_WORKER_URL = 'https://REPLACE-WITH-YOUR-WORKER.workers.dev';
+    const STEP_AI_TUTOR_WORKER_URL = 'https://step-ai-tutor.junbin89.workers.dev';
 
     async function askStepAiTutor(mode) {
       if (aiTutorBusy) return;
