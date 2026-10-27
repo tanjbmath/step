@@ -336,6 +336,12 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
           ) || (
             ownsAssignment(assignmentId)
+            && resource.data.status == 'helping'
+            && request.resource.data.status == 'submitted'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) || (
+            ownsAssignment(assignmentId)
             && resource.data.status in ['pending', 'helping']
             && request.resource.data.status == 'expired'
             && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'expired'
