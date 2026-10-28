@@ -340,7 +340,7 @@ service cloud.firestore {
                 'activeHelpLockKey' in request.resource.data
                 && (
                   request.resource.data.activeHelpLockKey == resource.data.activeHelpLockKey
-                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
                 )
               )
             )
@@ -353,7 +353,7 @@ service cloud.firestore {
               // If the parent assignment has already been removed, allow cleanup of orphaned work.
               !exists(/databases/$(database)/documents/assignments/$(assignmentId))
               || !('activeHelpLockKey' in resource.data)
-              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
             )
           );
 
@@ -374,7 +374,7 @@ service cloud.firestore {
                 // Orphaned slides can be removed after the teacher deletes the parent assignment.
                 !exists(/databases/$(database)/documents/assignments/$(assignmentId))
                 || !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
-                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
               )
             );
         }
