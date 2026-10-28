@@ -1329,6 +1329,11 @@ async function loadAssignmentProgressCounts(assignment) {
       stopStudentPreviewListeners();
       inspectingStudentId = stId;
       currentSubmissionStatus = status || 'submitted';
+      // Teacher feedback should be visually distinct from the student's own writing.
+      currentColor = '#dc2626';
+      const annotationColorPicker = document.getElementById('colorPicker');
+      if (annotationColorPicker) annotationColorPicker.value = currentColor;
+      setTool('pen');
       window.currentInspectedStudentRecord = studentRecord || { studentUid: stId, id: stId, status: currentSubmissionStatus };
       updatePeerHelpControls();
       teacherDashboard.classList.add('hidden');
@@ -2369,7 +2374,9 @@ async function loadAssignmentProgressCounts(assignment) {
     }
     // Advanced Pointer Events for Stylus / Apple Pencil + Palm Rejection Toggle
     function handlePointerDown(e) {
-      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') {
+      // Completed students may draw while helping; their own assignment remains read-only.
+      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress'
+          && !['helper', 'teacher'].includes(activeHelpMode)) {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return;
       }
