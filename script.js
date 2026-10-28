@@ -2765,34 +2765,48 @@ async function loadAssignmentProgressCounts(assignment) {
         const requestRef = requestsRef.doc();
         const workKey = `wk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         const now = firebase.firestore.FieldValue.serverTimestamp();
-        const batch = db.batch();
-        batch.set(requestRef, {
-          requestId: requestRef.id,
-          question: question.trim().slice(0, 500),
-          requestMode: isPeerHelpEnabled() ? 'peer' : 'teacher',
-          status: 'pending',
-          slideIndex: currentSlideIndex,
-          workKey,
-          helperUid: null,
-          createdAt: now,
-          updatedAt: now
-        });
-        batch.set(db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners').doc(requestRef.id), {
-          requesterUid: signedInUser.uid,
-          createdAt: now
-        });
-        batch.set(requestRef.collection('slides').doc(`slide_${currentSlideIndex}`), {
-          canvasData: exportCanvasJpeg(),
-          updatedAt: now
-        });
-        batch.set(peerHelpLockRef(workKey), { requestId: requestRef.id, workKey, status: 'pending', createdAt: now, updatedAt: now });
-        batch.set(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid), {
-          activeHelpLockKey: workKey
-        }, { merge: true });
-        await batch.commit();
+        const requestedMode = isPeerHelpEnabled() ? 'peer' : 'teacher';
+        let finalMode = requestedMode;
+        const canvasData = exportCanvasJpeg();
+        const commitRequest = async mode => {
+          const batch = db.batch();
+          batch.set(requestRef, {
+            requestId: requestRef.id,
+            question: question.trim().slice(0, 500),
+            requestMode: mode,
+            status: 'pending',
+            slideIndex: currentSlideIndex,
+            workKey,
+            helperUid: null,
+            createdAt: now,
+            updatedAt: now
+          });
+          batch.set(db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners').doc(requestRef.id), {
+            requesterUid: signedInUser.uid,
+            createdAt: now
+          });
+          batch.set(requestRef.collection('slides').doc(`slide_${currentSlideIndex}`), {
+            canvasData,
+            updatedAt: now
+          });
+          batch.set(peerHelpLockRef(workKey), { requestId: requestRef.id, workKey, status: 'pending', createdAt: now, updatedAt: now });
+          batch.set(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid), {
+            activeHelpLockKey: workKey
+          }, { merge: true });
+          await batch.commit();
+        };
+        try {
+          await commitRequest(requestedMode);
+        } catch (err) {
+          // If the teacher toggled Peer Help off while this student page was open,
+          // safely fall back to a teacher-only request without adding a read.
+          if (requestedMode !== 'peer') throw err;
+          finalMode = 'teacher';
+          await commitRequest('teacher');
+        }
         document.getElementById('askForHelpModal').classList.add('hidden');
         document.getElementById('askForHelpForm').reset();
-        showToast('Peer Help request sent. Your identity is hidden from other students.', 'success');
+        showToast(finalMode === 'peer' ? 'Peer Help request sent. Your identity is hidden from other students.' : 'Teacher Help request sent.', 'success');
         startPeerHelpListeners();
       } catch (err) {
         console.error('Could not create Peer Help request:', err);
