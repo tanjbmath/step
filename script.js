@@ -804,15 +804,34 @@
         updateAssignmentStudentLink();
       }, err => console.warn('Assignment snapshot notice:', err));
 
+      // Refresh cross-assignment statistics only when roster membership or status changes.
+      // Changes to helpRequested/helpQuestion and other non-status fields should not trigger
+      // another set of reads across every assignment.
+      const joinedStatusById = new Map();
+      const assignedStatusById = new Map();
+      const hasStatusChanges = (snapshot, previousStatuses) => {
+        let changed = snapshot.docs.length !== previousStatuses.size;
+        const nextStatuses = new Map();
+        snapshot.docs.forEach(doc => {
+          const status = String((doc.data() || {}).status || '').trim().toLowerCase();
+          nextStatuses.set(doc.id, status);
+          if (!previousStatuses.has(doc.id) || previousStatuses.get(doc.id) !== status) changed = true;
+        });
+        previousStatuses.clear();
+        nextStatuses.forEach((status, id) => previousStatuses.set(id, status));
+        return changed;
+      };
+
       if (unsubStudents) unsubStudents();
       unsubStudents = db.collection('assignments').doc(assignmentId).collection('students').onSnapshot(snapshot => {
+        const statusChanged = hasStatusChanges(snapshot, joinedStatusById);
         currentJoinedStudents = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         renderTeacherRoster();
-        // Keep assignment-level progress badges and the overview current after submit/review.
-        scheduleTeacherStudentStatsRefresh();
+        if (statusChanged) scheduleTeacherStudentStatsRefresh();
       }, err => {
         console.warn('Student listener notice:', err);
         currentJoinedStudents = [];
+        joinedStatusById.clear();
         renderTeacherRoster();
       });
 
@@ -820,11 +839,14 @@
       currentAssignedStudents = [];
       // Listen to assignment-targeted records as well; submission/review updates these records.
       unsubAssignedStudents = db.collection('assignments').doc(assignmentId).collection('assignedStudents').onSnapshot(snapshot => {
+        const statusChanged = hasStatusChanges(snapshot, assignedStatusById);
         currentAssignedStudents = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         renderTeacherRoster();
+        if (statusChanged) scheduleTeacherStudentStatsRefresh();
       }, err => {
         console.warn('Assigned-student listener notice:', err);
         currentAssignedStudents = [];
+        assignedStatusById.clear();
         renderTeacherRoster();
       });
     }
