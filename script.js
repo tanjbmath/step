@@ -245,6 +245,7 @@
     const ownedHelpRequestListeners = new Map();
     const finishedOwnedHelpRequestListeners = new Set();
     let unsubTeacherHelpRequests = null;
+    let teacherHelpListeningAssignmentId = null;
     const teacherRequesterLabelCache = new Map();
     let unsubActiveHelpSession = null;
     let peerHelpListeningAssignmentId = null;
@@ -1207,13 +1208,16 @@ async function loadAssignmentProgressCounts(assignment) {
       studentPreviewUnsubscribers.clear();
     }
 
-    // Coalesce bursts of roster changes into one statistics refresh.
+    // Statistics aggregate every assignment roster, so refresh only while the panel is visible.
+    // This avoids repeated collection reads in the background when students' work changes.
     function scheduleTeacherStudentStatsRefresh() {
+      const panel = document.getElementById('teacherStudentStatsPanel');
+      if (!panel || panel.classList.contains('hidden')) return;
       if (teacherStatsRefreshTimer) clearTimeout(teacherStatsRefreshTimer);
       teacherStatsRefreshTimer = setTimeout(() => {
         teacherStatsRefreshTimer = null;
-        loadTeacherStudentStats();
-      }, 500);
+        if (!panel.classList.contains('hidden')) loadTeacherStudentStats();
+      }, 1500);
     }
 
     async function setStudentReviewStatus(student, status) {
@@ -1630,6 +1634,14 @@ async function loadAssignmentProgressCounts(assignment) {
       if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
       if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
       if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
+      teacherHelpListeningAssignmentId = null;
+      if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
+      if (activeHelpMode === 'teacher') {
+        activeHelpRequestId = null;
+        activeHelpRequestData = null;
+        activeHelpMode = null;
+        updatePeerHelpControls();
+      }
       ownedHelpRequestListeners.forEach(unsub => unsub());
       ownedHelpRequestListeners.clear();
       finishedOwnedHelpRequestListeners.clear();
@@ -3004,8 +3016,9 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function startTeacherHelpMonitor(assignmentId) {
       if (!db || !signedInUser || currentUserRole !== 'teacher' || !assignmentId) return;
-      if (unsubTeacherHelpRequests && peerHelpListeningAssignmentId === assignmentId) return;
+      if (unsubTeacherHelpRequests && teacherHelpListeningAssignmentId === assignmentId) return;
       if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
+      teacherHelpListeningAssignmentId = assignmentId;
       const assignmentRef = db.collection('assignments').doc(assignmentId);
       // Monitor actionable requests only and cache requester labels between snapshots.
       unsubTeacherHelpRequests = assignmentRef.collection('helpRequests')
