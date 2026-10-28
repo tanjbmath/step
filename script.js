@@ -2524,6 +2524,9 @@ async function loadAssignmentProgressCounts(assignment) {
         card.className = 'peer-help-request-card';
         card.dataset.status = item.status || 'pending';
         card.dataset.peerRequest = item.id;
+        const mode = document.createElement('p');
+        mode.className = 'text-[11px] font-bold uppercase tracking-wide text-sky-700 mt-1';
+        mode.textContent = item.requestMode === 'teacher' ? 'Teacher Help' : 'Peer Help';
         const question = document.createElement('p');
         question.className = 'text-sm font-semibold text-slate-800 whitespace-pre-wrap';
         question.textContent = item.question || 'Help request';
@@ -2541,7 +2544,7 @@ async function loadAssignmentProgressCounts(assignment) {
           requester.textContent = 'Requester: ' + item.requesterLabel;
           card.appendChild(requester);
         }
-        card.append(question, status);
+        card.append(mode, question, status);
         const actions = document.createElement('div');
         actions.className = 'flex flex-wrap gap-2 mt-3';
         const addAction = (label, className, callback) => {
@@ -2680,6 +2683,12 @@ async function loadAssignmentProgressCounts(assignment) {
                   copyingHelpResults.delete(requestDoc.id);
                   requesterHelpLock = false;
                   updatePeerHelpControls();
+                  if (copiedHelpResults.has(requestDoc.id)) {
+                    const stopListening = ownedHelpRequestListeners.get(requestDoc.id);
+                    if (stopListening) stopListening();
+                    ownedHelpRequestListeners.delete(requestDoc.id);
+                    finishedOwnedHelpRequestListeners.add(requestDoc.id);
+                  }
                 }
               } else if (copyingHelpResults.has(requestDoc.id)) {
                 requesterHelpLock = true;
@@ -2713,7 +2722,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function renderOwnedPeerHelpRequests(items) {
       const list = document.getElementById('peerHelpActivityLog');
-      hasOpenOwnedHelpRequest = items.some(item => ['pending', 'helping', 'submitted'].includes(item.status));
+      hasOpenOwnedHelpRequest = items.some(item => ['pending', 'helping'].includes(item.status));
       updateSubmitAssignmentButton();
       if (!list) return;
       const existing = Array.from(list.querySelectorAll('[data-owned-request]'));
