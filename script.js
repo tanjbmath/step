@@ -781,7 +781,6 @@
       document.getElementById('currentAssignmentDesc').textContent = currentAssignmentData.description || 'No instructions provided.';
       document.getElementById('currentSessionCode').textContent = currentAssignmentData.sessionCode || '------';
       updateAssignmentStudentLink();
-      startTeacherHelpMonitor(assignmentId);
 
       if (!db) {
         currentJoinedStudents = [];
@@ -1133,6 +1132,7 @@ async function loadAssignmentProgressCounts(assignment) {
             <h5 class="font-bold text-slate-800 break-words">${escapeHtml(displayName)}</h5>
             <p class="text-xs text-slate-500 break-all">${escapeHtml(student.studentEmail || student.email || '')}</p>
             <span class="inline-block mt-1 text-xs rounded-full px-2 py-1" style="${statusBadgeStyle}">${labels[String(student.status || '').trim().toLowerCase()] || 'In Progress'}</span>
+            ${student.helpRequested ? '<span class="raised-hand-badge inline-flex items-center gap-1 mt-2 rounded-full px-2.5 py-1 text-xs font-bold"><i class="fa-solid fa-hand"></i> NEEDS HELP</span><p class="mt-1 text-xs text-rose-700 whitespace-pre-wrap">' + escapeHtml(student.helpQuestion || 'Student raised a hand.') + '</p>' : ''}
           </div><span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded font-semibold whitespace-nowrap">${currentAssignmentData?.slides?.length || 1} Slides</span></div>
           <div class="h-32 bg-white border border-slate-200 rounded flex items-center justify-center overflow-hidden relative">
             ${student.isJoined ? `<img id="thumb-${student.id}" class="w-full h-full object-contain" src="" alt="Live Preview">` : '<span class="text-xs text-slate-400">Not joined yet</span>'}
@@ -1237,6 +1237,7 @@ async function loadAssignmentProgressCounts(assignment) {
       inspectingStudentId = stId;
       currentSubmissionStatus = status || 'submitted';
       window.currentInspectedStudentRecord = studentRecord || { studentUid: stId, id: stId, status: currentSubmissionStatus };
+      updatePeerHelpControls();
       teacherDashboard.classList.add('hidden');
       workspaceScreen.classList.remove('hidden');
 
@@ -1289,6 +1290,7 @@ async function loadAssignmentProgressCounts(assignment) {
       currentSessionCode = inputCode;
       currentAssignedStudentKey = assignedDoc.exists ? assignedKey : null;
       currentSubmissionStatus = assignedStatus === 'assignment-started' ? 'in-progress' : assignedStatus;
+      window.currentStudentHelpRequested = Boolean(membership.helpRequested);
       updateSubmitAssignmentButton();
 
       studentJoinScreen.classList.add('hidden');
@@ -1379,8 +1381,8 @@ async function loadAssignmentProgressCounts(assignment) {
         canonicalNameInput.title = 'This name is saved to your account and is used for every assignment.';
 
         // Firestore rules validate that the code maps to this assignment before membership is created.
-        await db.collection('assignments').doc(matchedDocId)
-          .collection('students').doc(studentId).set({
+        const joinedStudentRef = db.collection('assignments').doc(matchedDocId).collection('students').doc(studentId);
+        await joinedStudentRef.set({
             uid: studentId,
             name: studentName,
             status: 'in-progress',
@@ -1389,6 +1391,8 @@ async function loadAssignmentProgressCounts(assignment) {
             joinedAt: now,
             lastWorkedAt: now
           }, { merge: true });
+        const joinedStudentDoc = await joinedStudentRef.get();
+        window.currentStudentHelpRequested = Boolean(joinedStudentDoc.exists && joinedStudentDoc.data().helpRequested);
 
         // Assignment content is readable only after the student's membership exists.
         const assignmentDoc = await db.collection('assignments').doc(matchedDocId).get();
@@ -1523,11 +1527,11 @@ async function loadAssignmentProgressCounts(assignment) {
       const button = document.getElementById('submitAssignmentBtn');
       if (!button) return;
       const isStudent = currentUserRole === 'student' && !inspectingStudentId;
-      button.classList.toggle('hidden', !isStudent || currentSubmissionStatus !== 'in-progress' || requesterHelpLock || Boolean(activeHelpRequestId));
+      button.classList.toggle('hidden', !isStudent || currentSubmissionStatus !== 'in-progress');
       button.disabled = false;
       button.textContent = 'Submit assignment';
       const ask = document.getElementById('askForHelpBtn');
-      if (ask) ask.classList.toggle('hidden', !isStudent || currentSubmissionStatus !== 'in-progress' || requesterHelpLock || hasOpenOwnedHelpRequest || Boolean(activeHelpRequestId));
+      if (ask) ask.classList.toggle('hidden', !isStudent || currentSubmissionStatus !== 'in-progress');
     }
 
     document.getElementById('teacherMarkCompletedBtn').addEventListener('click', async () => {
@@ -1770,14 +1774,6 @@ async function loadAssignmentProgressCounts(assignment) {
 
       if (unsubSlideWork) unsubSlideWork();
 
-      if(db&&activeHelpRequestId&&activeHelpMode==='teacher'){
-        if(unsubSlideWork){unsubSlideWork();unsubSlideWork=null;}redrawBackgroundAndCanvas();
-        const key='step_teacher_help_draft_'+currentAssignmentId+'_'+activeHelpRequestId+'_'+currentSlideIndex,draft=localStorage.getItem(key);
-        const ref=db.collection('assignments').doc(currentAssignmentId).collection('students').doc(targetStudentId).collection('slides').doc('slide_'+currentSlideIndex);
-        const draw=data=>{if(!data)return;const img=new Image();img.onload=()=>{if(!isDrawing)ctx.drawImage(img,0,0,mainCanvas.width,mainCanvas.height);};img.src=data;};
-        if(draft)draw(draft);else ref.get().then(doc=>{if(doc.exists&&doc.data().canvasData)draw(doc.data().canvasData);}).catch(err=>console.warn('Could not load student work for teacher annotation:',err));
-        return;
-      }
 
       if (db) {
         unsubSlideWork = db.collection('assignments').doc(currentAssignmentId)
@@ -1789,14 +1785,6 @@ async function loadAssignmentProgressCounts(assignment) {
             redrawBackgroundAndCanvas();
             if (doc.exists) {
               const slideData=doc.data();
-              if(currentUserRole==='student'&&slideData.teacherHelpRequestId){
-                const finished=ownedHelpRequestState.get(slideData.teacherHelpRequestId);
-                if(finished&&['pending','helping'].includes(finished.status)){
-                  ownedHelpRequestState.set(finished.id,{...finished,status:'submitted'});
-                  requesterHelpLock=false;hasOpenOwnedHelpRequest=false;
-                  renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
-                }
-              }
               if(slideData.canvasData){const img=new Image();img.onload=()=>ctx.drawImage(img,0,0,mainCanvas.width,mainCanvas.height);img.src=slideData.canvasData;}
             }
           }, err => console.warn("Slide listener notice:", err));
@@ -1814,7 +1802,6 @@ async function loadAssignmentProgressCounts(assignment) {
     function saveCanvasToFirestore() {
       const targetStudentId = inspectingStudentId || studentId;
       if (!currentAssignmentId || !targetStudentId) return;
-      if (requesterHelpLock && !activeHelpRequestId) return;
       canvasSaveDirty = true;
       if (saveTimeout === null) {
         saveTimeout = setTimeout(() => {
@@ -1838,9 +1825,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const targetStudentId = inspectingStudentId || studentId;
         const assignmentId = currentAssignmentId;
         const slideIndex = currentSlideIndex;
-        const helpRequestId = activeHelpRequestId;
-        const helpMode = activeHelpMode;
-        if (!assignmentId || !targetStudentId || (requesterHelpLock && !helpRequestId)) return;
+        if (!assignmentId || !targetStudentId) return;
 
         const exportCanvas = document.createElement('canvas');
         exportCanvas.width = mainCanvas.width;
@@ -1852,8 +1837,6 @@ async function loadAssignmentProgressCounts(assignment) {
         const dataUrl = exportCanvas.toDataURL('image/jpeg', 0.92);
         const now = firebase.firestore.FieldValue.serverTimestamp();
 
-        if(helpRequestId&&helpMode==='teacher'){localStorage.setItem('step_teacher_help_draft_'+assignmentId+'_'+helpRequestId+'_'+slideIndex,dataUrl);return;}
-        if (requesterHelpLock) return;
         if (db && inspectingStudentId && currentUserRole === 'teacher') {
           await db.collection('assignments').doc(assignmentId)
             .collection('students').doc(targetStudentId)
@@ -2248,7 +2231,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
     // Advanced Pointer Events for Stylus / Apple Pencil + Palm Rejection Toggle
     function handlePointerDown(e) {
-      if (!activeHelpMode && currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') {
+      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return;
       }
