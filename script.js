@@ -1624,7 +1624,7 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('exitWorkspaceBtn').addEventListener('click', () => {
       // Leaving an active help session does not cancel it. The teacher can submit the
       // last saved annotations or release the lock from the monitor.
-      if (activeHelpMode === 'helper') {
+      if (false) {
         if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
         activeHelpRequestId = null;
         activeHelpRequestData = null;
@@ -1805,19 +1805,12 @@ async function loadAssignmentProgressCounts(assignment) {
 
       if (unsubSlideWork) unsubSlideWork();
 
-      if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
-        unsubSlideWork = db.collection('assignments').doc(currentAssignmentId)
-          .collection('helpRequests').doc(activeHelpRequestId)
-          .collection('slides').doc(`slide_${currentSlideIndex}`)
-          .onSnapshot(doc => {
-            if (isDrawing) return;
-            redrawBackgroundAndCanvas();
-            if (doc.exists && doc.data().canvasData) {
-              const img = new Image();
-              img.src = doc.data().canvasData;
-              img.onload = () => ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
-            }
-          }, err => console.warn('Peer Help canvas listener:', err));
+      if(db&&activeHelpRequestId&&activeHelpMode==='teacher'){
+        if(unsubSlideWork){unsubSlideWork();unsubSlideWork=null;}redrawBackgroundAndCanvas();
+        const key='step_teacher_help_draft_'+currentAssignmentId+'_'+activeHelpRequestId+'_'+currentSlideIndex,draft=localStorage.getItem(key);
+        const ref=db.collection('assignments').doc(currentAssignmentId).collection('students').doc(targetStudentId).collection('slides').doc('slide_'+currentSlideIndex);
+        const draw=data=>{if(!data)return;const img=new Image();img.onload=()=>{if(!isDrawing)ctx.drawImage(img,0,0,mainCanvas.width,mainCanvas.height);};img.src=data;};
+        if(draft)draw(draft);else ref.get().then(doc=>{if(doc.exists&&doc.data().canvasData)draw(doc.data().canvasData);}).catch(err=>console.warn('Could not load student work for teacher annotation:',err));
         return;
       }
 
@@ -1892,13 +1885,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const dataUrl = exportCanvas.toDataURL('image/jpeg', 0.92);
         const now = firebase.firestore.FieldValue.serverTimestamp();
 
-        if (db && helpRequestId && ['helper', 'teacher'].includes(helpMode)) {
-          await db.collection('assignments').doc(assignmentId)
-            .collection('helpRequests').doc(helpRequestId)
-            .collection('slides').doc(`slide_${slideIndex}`)
-            .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
-          return;
-        }
+        if(helpRequestId&&helpMode==='teacher'){localStorage.setItem('step_teacher_help_draft_'+assignmentId+'_'+helpRequestId+'_'+slideIndex,dataUrl);return;}
         if (requesterHelpLock) return;
         if (db && inspectingStudentId && currentUserRole === 'teacher') {
           await db.collection('assignments').doc(assignmentId)
@@ -2298,7 +2285,7 @@ async function loadAssignmentProgressCounts(assignment) {
         showToast('Your canvas is temporarily locked while a peer is helping.', 'info');
         return;
       }
-      if (activeHelpMode === 'helper' || activeHelpMode === 'teacher') {
+      if (activeHelpMode === 'teacher') {
         activeTool = 'pen';
         currentColor = PEER_HELP_COLOUR;
       }
@@ -2338,7 +2325,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function handlePointerMove(e) {
       if (!isDrawing) return;
-      if (activeHelpMode === 'helper' || activeHelpMode === 'teacher') currentColor = PEER_HELP_COLOUR;
+      if (activeHelpMode === 'teacher') currentColor = PEER_HELP_COLOUR;
 
       // Filter touch points in Stylus Only mode during motion
       if (isStylusOnlyMode && e.pointerType === 'touch') {
@@ -2381,7 +2368,7 @@ async function loadAssignmentProgressCounts(assignment) {
         try {
           mainCanvas.releasePointerCapture(e.pointerId);
         } catch (err) {}
-        if (activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
+        if (activeHelpRequestId && activeHelpMode === 'teacher') {
           saveActiveHelpCanvasNow().catch(err => console.warn('Immediate Peer Help save failed:', err));
         } else {
           saveCanvasToFirestore();
@@ -2429,525 +2416,112 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function updatePeerHelpControls() {
-      const panel = document.getElementById('peerHelpPanel');
-      if (panel) panel.classList.toggle('hidden', !currentAssignmentId || !signedInUser);
-      const helperMode = activeHelpMode === 'helper';
-      const teacherMode = activeHelpMode === 'teacher';
-      const lockBadge = document.getElementById('peerHelpStatusBadge');
-      const submitHelper = document.getElementById('submitPeerHelpBtn');
-      const submitTeacher = document.getElementById('teacherSubmitPeerHelpBtn');
-      if (submitHelper) submitHelper.classList.toggle('hidden', !helperMode);
-      if (submitTeacher) submitTeacher.classList.toggle('hidden', !teacherMode);
-      if (lockBadge) {
-        const visible = requesterHelpLock || helperMode || teacherMode;
-        lockBadge.classList.toggle('hidden', !visible);
-        lockBadge.textContent = requesterHelpLock ? 'Someone is helping' : (helperMode ? 'Helping a peer' : (teacherMode ? 'Reviewing help session' : ''));
-        lockBadge.classList.toggle('peer-help-pulse', requesterHelpLock || helperMode);
-      }
-      const colorPicker = document.getElementById('colorPicker');
-      const eraser = document.getElementById('toolEraser');
-      const textTool = document.getElementById('toolText');
-      const penTool = document.getElementById('toolPen');
-      const lockTools = helperMode || teacherMode || requesterHelpLock;
-      ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn', 'prevSlideBtn', 'nextSlideBtn'].forEach(id => {
-        const control = document.getElementById(id);
-        if (control) control.disabled = requesterHelpLock || ((helperMode || teacherMode) && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
-      });
-      if (colorPicker) {
-        colorPicker.disabled = lockTools;
-        if (lockTools) colorPicker.value = PEER_HELP_COLOUR;
-      }
-      if (eraser) eraser.disabled = lockTools;
-      if (textTool) textTool.disabled = lockTools;
-      if (penTool && lockTools) {
-        activeTool = 'pen';
-        penTool.classList.add('bg-indigo-600', 'text-white');
-        penTool.classList.remove('bg-white', 'text-slate-700');
-      }
-      if (mainCanvas) mainCanvas.style.pointerEvents = requesterHelpLock ? 'none' : 'auto';
-      updateSubmitAssignmentButton();
+      const panel=document.getElementById('peerHelpPanel'); if(panel) panel.classList.toggle('hidden',!currentAssignmentId||!signedInUser);
+      const teacherMode=activeHelpMode==='teacher', ask=document.getElementById('askForHelpBtn');
+      const submitTeacher=document.getElementById('teacherSubmitPeerHelpBtn'), submitHelper=document.getElementById('submitPeerHelpBtn');
+      const lockBadge=document.getElementById('peerHelpStatusBadge'), isStudent=currentUserRole==='student';
+      if(ask) ask.classList.toggle('hidden',!isStudent||currentSubmissionStatus!=='in-progress'||requesterHelpLock||hasOpenOwnedHelpRequest||Boolean(activeHelpRequestId));
+      if(submitTeacher) submitTeacher.classList.toggle('hidden',!teacherMode); if(submitHelper) submitHelper.classList.add('hidden');
+      if(lockBadge){lockBadge.classList.toggle('hidden',!requesterHelpLock&&!teacherMode);lockBadge.textContent=requesterHelpLock?'Waiting for teacher help':(teacherMode?'Annotating for student':'');lockBadge.classList.remove('peer-help-pulse');}
+      const lockTools=teacherMode||requesterHelpLock;
+      ['toolPen','toolEraser','toolText','colorPicker','brushSize','clearCanvasBtn','capturePhotoBtn','chooseImageBtn','undoCanvasBtn','redoCanvasBtn','prevSlideBtn','nextSlideBtn'].forEach(id=>{const c=document.getElementById(id);if(c)c.disabled=requesterHelpLock||(teacherMode&&!['toolPen','brushSize','undoCanvasBtn','redoCanvasBtn'].includes(id));});
+      const colorPicker=document.getElementById('colorPicker'),eraser=document.getElementById('toolEraser'),textTool=document.getElementById('toolText'),penTool=document.getElementById('toolPen');
+      if(colorPicker){colorPicker.disabled=lockTools;if(teacherMode)colorPicker.value=PEER_HELP_COLOUR;} if(eraser)eraser.disabled=lockTools;if(textTool)textTool.disabled=lockTools;
+      if(penTool&&teacherMode){activeTool='pen';penTool.classList.add('bg-indigo-600','text-white');penTool.classList.remove('bg-white','text-slate-700');}
+      if(mainCanvas)mainCanvas.style.pointerEvents=requesterHelpLock?'none':'auto'; updateSubmitAssignmentButton();
     }
 
-    function renderPeerHelpRequests(requests, audience = 'student') {
-      const list = document.getElementById('peerHelpRequestList');
-      const teacherList = document.getElementById('teacherPeerHelpList');
-      if (audience === 'teacher' && !teacherList) return;
-      const target = audience === 'teacher' ? teacherList : list;
-      if (!target) return;
-      if (audience !== 'teacher') {
-        const badge = document.getElementById('peerHelpCountBadge');
-        if (badge) {
-          const count = requests.filter(item => item.status === 'pending').length;
-          badge.textContent = count === 1 ? '1 new help request' : `${count} new help requests`;
-          badge.classList.toggle('hidden', count === 0);
-        }
-      }
-      target.querySelectorAll('[data-peer-request]').forEach(node => node.remove());
-      const oldEmpty = target.querySelector('[data-peer-help-empty]');
-      if (oldEmpty) oldEmpty.remove();
-      if (!requests.length) {
-        if (!target.querySelector('[data-owned-request]')) {
-          const empty = document.createElement('p');
-          empty.dataset.peerHelpEmpty = 'true';
-          empty.className = 'text-sm text-slate-500';
-          empty.textContent = 'No peer help requests to show.';
-          target.appendChild(empty);
-        }
-        return;
-      }
-      requests.sort((a, b) => {
-        const order = { helping: 0, pending: 1, submitted: 2, acknowledged: 3, expired: 4 };
-        return (order[a.status] ?? 5) - (order[b.status] ?? 5);
-      }).forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'peer-help-request-card';
-        card.dataset.status = item.status || 'pending';
-        card.dataset.peerRequest = item.id;
-        const question = document.createElement('p');
-        question.className = 'text-sm font-semibold text-slate-800 whitespace-pre-wrap';
-        question.textContent = item.question || 'Help request';
-        const status = document.createElement('p');
-        status.className = 'text-xs text-slate-500 mt-1';
-        status.textContent = audience === 'teacher' && item.status === 'helping'
-          ? 'Someone is helping • Active session'
-          : (item.status || 'pending').replace(/-/g, ' ').replace(/^./, x => x.toUpperCase());
-        if (audience === 'teacher' && item.status === 'helping') {
-          status.className = 'inline-flex mt-2 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-1 text-xs font-bold peer-help-pulse';
-        }
-        if (audience === 'teacher' && item.requesterLabel) {
-          const requester = document.createElement('p');
-          requester.className = 'text-xs text-slate-600 mt-1';
-          requester.textContent = 'Requester: ' + item.requesterLabel;
-          card.appendChild(requester);
-        }
-        card.append(question, status);
-        const actions = document.createElement('div');
-        actions.className = 'flex flex-wrap gap-2 mt-3';
-        const addAction = (label, className, callback) => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = className;
-          btn.textContent = label;
-          btn.addEventListener('click', callback);
-          actions.appendChild(btn);
-        };
-        if (audience === 'teacher') {
-          if (item.status === 'helping') {
-            addAction('Submit on behalf', 'px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold', () => submitPeerHelp(item.id, true));
-            addAction('Release lock', 'px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold', () => expirePeerHelpRequest(item.id));
-          }
-          if (item.status === 'pending') {
-            addAction('Help this student', 'px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-semibold', () => claimPeerHelpRequestAsTeacher(item.id));
-            addAction('Expire request', 'px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold', () => expirePeerHelpRequest(item.id));
-          }
-          const activityStamp = item.lastActivityAt || item.claimedAt;
-          const elapsed = activityStamp?.toDate ? Math.max(0, Math.round((Date.now() - activityStamp.toDate().getTime()) / 60000)) : null;
-          if (item.status === 'helping' && elapsed !== null) {
-            const timer = document.createElement('span');
-            timer.className = 'self-center text-xs font-semibold ' + (elapsed >= 5 ? 'text-rose-700' : 'text-amber-800');
-            timer.textContent = elapsed >= 5 ? `No activity for ${elapsed} min — check or recover session` : `Last activity ${elapsed} min ago`;
-            actions.appendChild(timer);
-          }
-        } else if (item.status === 'pending' && currentSubmissionStatus === 'completed' && !activeHelpRequestId) {
-          addAction('Help this student', 'px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-semibold', () => claimPeerHelpRequest(item.id));
-        } else if (item.status === 'submitted' && item.isOwned) {
-          addAction('Thanks!', 'px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold', () => acknowledgePeerHelp(item.id));
-        } else if (item.status === 'helping' && item.isOwned) {
-          const active = document.createElement('span');
-          active.className = 'text-xs font-bold text-amber-800 peer-help-pulse rounded-full px-2 py-1';
-          active.textContent = 'Someone is helping';
-          actions.appendChild(active);
-        } else if (item.status === 'acknowledged' && item.isOwned) {
-          const done = document.createElement('span');
-          done.className = 'text-xs font-semibold text-emerald-700';
-          done.textContent = 'Thanks recorded';
-          actions.appendChild(done);
-        }
-        if (actions.childElementCount) card.appendChild(actions);
-        target.appendChild(card);
+    function renderPeerHelpRequests(requests,audience='teacher'){
+      const target=document.getElementById('teacherPeerHelpList');if(!target||audience!=='teacher')return;
+      target.querySelectorAll('[data-peer-request]').forEach(n=>n.remove());const old=target.querySelector('[data-peer-help-empty]');if(old)old.remove();
+      if(!requests.length){const e=document.createElement('p');e.dataset.peerHelpEmpty='true';e.className='text-sm text-slate-500';e.textContent='No teacher-help requests waiting.';target.appendChild(e);return;}
+      requests.sort((a,b)=>({helping:0,pending:1}[a.status]??2)-({helping:0,pending:1}[b.status]??2)).forEach(item=>{
+        const card=document.createElement('div');card.className='teacher-help-request-card';card.dataset.status=item.status||'pending';card.dataset.peerRequest=item.id;
+        const q=document.createElement('p');q.className='text-sm font-semibold text-slate-800 whitespace-pre-wrap';q.textContent=item.question||'Teacher-help request';
+        const who=document.createElement('p');who.className='text-xs text-slate-600 mt-1';who.textContent='Student: '+(item.requesterName||'Student');
+        const st=document.createElement('p');st.className='text-xs text-slate-500 mt-1';st.textContent=item.status==='helping'?'Teacher session in progress':'Waiting for teacher';card.append(q,who,st);
+        const actions=document.createElement('div');actions.className='flex flex-wrap gap-2 mt-3';
+        const add=(label,cls,cb)=>{const b=document.createElement('button');b.type='button';b.className=cls;b.textContent=label;b.addEventListener('click',cb);actions.appendChild(b);};
+        if(item.status==='pending'&&item.requesterUid)add('Help this student','px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-semibold',()=>claimPeerHelpRequestAsTeacher(item.id));
+        if(item.status==='pending'||item.status==='helping')add('Close request','px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold',()=>expirePeerHelpRequest(item.id));
+        card.appendChild(actions);target.appendChild(card);
       });
     }
 
-    function startPeerHelpListeners() {
-      if (!db || !signedInUser || !currentAssignmentId) return;
-      const assignmentChanged = peerHelpListeningAssignmentId !== currentAssignmentId;
-      if (assignmentChanged) {
-        if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
-        if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
-        if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
-        ownedHelpRequestListeners.forEach(unsub => unsub());
-        ownedHelpRequestListeners.clear();
-        finishedOwnedHelpRequestListeners.clear();
-        ownedHelpRequestState.clear();
-        teacherRequesterLabelCache.clear();
-        requesterHelpLock = false;
-        peerHelpListeningAssignmentId = currentAssignmentId;
-      } else if (unsubHelpRequests) {
-        unsubHelpRequests();
-        unsubHelpRequests = null;
-      }
-
-      const panel = document.getElementById('peerHelpPanel');
-      if (panel) panel.classList.remove('hidden');
-
-      const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
-      if (currentUserRole === 'teacher') {
-        startTeacherHelpMonitor(currentAssignmentId);
-      } else if (currentSubmissionStatus === 'completed') {
-        // Fetch on opening/refresh instead of keeping an assignment-wide listener open.
-        requestsRef.where('status', '==', 'pending').limit(10).get().then(snapshot => {
-          renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-        }).catch(err => console.warn('Available Peer Help fetch:', err));
-      } else {
-        const list = document.getElementById('peerHelpRequestList');
-        if (list) list.innerHTML = '<p class="text-sm text-slate-500">Only students who completed this assignment can help. Your requests will appear here.</p>';
-      }
-
-      // Keep one owner listener per assignment; reuse it when the panel refreshes.
-      if (unsubOwnedHelpRequests) return;
-      const ownersRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners');
-      unsubOwnedHelpRequests = ownersRef.where('requesterUid', '==', signedInUser.uid).onSnapshot(snapshot => {
-        const ownerIds = new Set(snapshot.docs.map(d => d.id));
-        ownedHelpRequestListeners.forEach((unsub, requestId) => {
-          if (!ownerIds.has(requestId)) {
-            unsub();
-            ownedHelpRequestListeners.delete(requestId);
-            ownedHelpRequestState.delete(requestId);
-          }
-        });
-        snapshot.docs.forEach(ownerDoc => {
-          if (ownedHelpRequestListeners.has(ownerDoc.id) || finishedOwnedHelpRequestListeners.has(ownerDoc.id)) return;
-          const unsub = requestsRef.doc(ownerDoc.id).onSnapshot(async requestDoc => {
-            if (!requestDoc.exists) return;
-            const data = requestDoc.data();
-            const item = { id: requestDoc.id, ...data, isOwned: true };
-            if (data.status === 'helping') {
-              requesterHelpLock = true;
-              updatePeerHelpControls();
-            } else if (data.status === 'submitted') {
-              // Keep the requester locked until the submitted help canvas has been copied.
-              requesterHelpLock = true;
-              updatePeerHelpControls();
-              if (!copiedHelpResults.has(requestDoc.id) && !copyingHelpResults.has(requestDoc.id)) {
-                copyingHelpResults.add(requestDoc.id);
-                copiedHelpResults.add(requestDoc.id);
-                try {
-                  const slideIndex = Number(data.slideIndex || 0);
-                  const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${slideIndex}`).get();
-                  if (!slideDoc.exists || !slideDoc.data().canvasData) throw new Error('The saved help canvas was not found.');
-                  await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
-                    .collection('slides').doc(`slide_${slideIndex}`)
-                    .set({ canvasData: slideDoc.data().canvasData, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), peerHelpRequestId: requestDoc.id }, { merge: true });
-                  currentSlideIndex = slideIndex;
-                  updateSlideNavigationUI();
-                  if (!activeHelpRequestId) loadCurrentSlideData();
-
-                  // Once the submitted canvas is safely copied, stop watching this request.
-                  // Keep its submitted state locally so the requester can still acknowledge it.
-                  const stopSubmittedListener = ownedHelpRequestListeners.get(requestDoc.id);
-                  if (stopSubmittedListener) {
-                    stopSubmittedListener();
-                    ownedHelpRequestListeners.delete(requestDoc.id);
-                  }
-                  finishedOwnedHelpRequestListeners.add(requestDoc.id);
-                } catch (err) {
-                  copiedHelpResults.delete(requestDoc.id);
-                  console.error('Could not apply peer annotations to requester canvas:', err);
-                  showToast('Help was submitted, but the annotated canvas could not be copied. You can continue working; inform your teacher if needed.', 'error');
-                } finally {
-                  copyingHelpResults.delete(requestDoc.id);
-                  requesterHelpLock = false;
-                  updatePeerHelpControls();
-                }
-              } else if (copyingHelpResults.has(requestDoc.id)) {
-                requesterHelpLock = true;
-                updatePeerHelpControls();
-              } else {
-                requesterHelpLock = false;
-                updatePeerHelpControls();
-              }
-            } else if (['acknowledged', 'expired'].includes(data.status)) {
-              requesterHelpLock = false;
-              updatePeerHelpControls();
-              const stopListening = ownedHelpRequestListeners.get(requestDoc.id);
-              if (stopListening) {
-                stopListening();
-                ownedHelpRequestListeners.delete(requestDoc.id);
-                finishedOwnedHelpRequestListeners.add(requestDoc.id);
-              }
-            }
-            ownedHelpRequestState.set(item.id, item);
-            renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
-          }, err => console.warn('Owned Peer Help listener:', err));
-          ownedHelpRequestListeners.set(ownerDoc.id, unsub);
-        });
-        if (!snapshot.docs.length) {
-          hasOpenOwnedHelpRequest = false;
-          renderOwnedPeerHelpRequests([]);
-          updatePeerHelpControls();
-        }
-      }, err => console.warn('Private Peer Help owner listener:', err));
+    function startPeerHelpListeners(){
+      if(!db||!signedInUser||!currentAssignmentId)return;
+      const panel=document.getElementById('peerHelpPanel');if(panel)panel.classList.remove('hidden');
+      if(currentUserRole==='teacher'){startTeacherHelpMonitor(currentAssignmentId);return;}
+      // Student requests are fetched on demand; no student-side help snapshot listeners remain.
+      db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').where('requesterUid','==',signedInUser.uid).limit(10).get()
+        .then(snap=>renderOwnedPeerHelpRequests(snap.docs.map(d=>({id:d.id,...d.data(),isOwned:true}))))
+        .catch(err=>console.warn('Could not load your teacher-help requests:',err));
     }
 
-    function renderOwnedPeerHelpRequests(items) {
-      const list = document.getElementById('peerHelpRequestList');
-      hasOpenOwnedHelpRequest = items.some(item => ['pending', 'helping', 'submitted'].includes(item.status));
-      updateSubmitAssignmentButton();
-      if (!list) return;
-      const existing = Array.from(list.querySelectorAll('[data-owned-request]'));
-      existing.forEach(node => node.remove());
-      items.forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'peer-help-request-card';
-        card.dataset.ownedRequest = item.id;
-        card.dataset.status = item.status || 'pending';
-        const question = document.createElement('p');
-        question.className = 'text-sm font-semibold text-slate-800 whitespace-pre-wrap';
-        question.textContent = item.question || 'Your help request';
-        const status = document.createElement('p');
-        status.className = 'text-xs text-slate-500 mt-1';
-        status.textContent = item.status === 'helping' ? 'Someone is helping — your canvas is locked temporarily.' :
-          item.status === 'submitted' ? 'Help submitted. Please acknowledge the help.' :
-          item.status === 'acknowledged' ? 'Thanks recorded.' :
-          item.status === 'expired' ? 'Request expired. You can continue working.' : 'Waiting for an eligible peer.';
-        card.append(question, status);
-        if (item.status === 'submitted') {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'mt-3 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold';
-          btn.textContent = 'Thanks!';
-          btn.addEventListener('click', () => acknowledgePeerHelp(item.id));
-          card.appendChild(btn);
-        }
-        list.prepend(card);
-      });
+    function renderOwnedPeerHelpRequests(items){
+      const list=document.getElementById('peerHelpRequestList');hasOpenOwnedHelpRequest=items.some(i=>['pending','helping'].includes(i.status));requesterHelpLock=items.some(i=>i.status==='helping');updateSubmitAssignmentButton();if(!list)return;
+      list.querySelectorAll('[data-owned-request]').forEach(n=>n.remove());const old=list.querySelector('[data-peer-help-empty]');if(old)old.remove();
+      if(!items.length){const e=document.createElement('p');e.dataset.peerHelpEmpty='true';e.className='text-sm text-slate-500';e.textContent='No teacher-help requests yet.';list.appendChild(e);}
+      items.forEach(item=>{const card=document.createElement('div');card.className='teacher-help-request-card';card.dataset.ownedRequest=item.id;card.dataset.status=item.status||'pending';
+        const q=document.createElement('p');q.className='text-sm font-semibold text-slate-800 whitespace-pre-wrap';q.textContent=item.question||'Your teacher-help request';
+        const st=document.createElement('p');st.className='text-xs text-slate-500 mt-1';st.textContent=item.status==='helping'?'Your teacher is working on this request. Your canvas is temporarily locked.':item.status==='submitted'?'Teacher annotations are ready and saved to your work.':item.status==='expired'?'This request was closed. You can continue working.':'Waiting for your teacher.';
+        card.append(q,st);list.appendChild(card);});updatePeerHelpControls();
     }
 
-    async function createPeerHelpRequest(question) {
-      if (!signedInUser || !currentAssignmentId || currentSubmissionStatus !== 'in-progress' || requesterHelpLock) {
-        showToast('You can request help while actively working on an assignment.', 'info');
-        return;
-      }
-      const button = document.getElementById('createPeerHelpBtn');
-      button.disabled = true;
-      try {
-        const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
-        const requestRef = requestsRef.doc();
-        const workKey = `wk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-        const now = firebase.firestore.FieldValue.serverTimestamp();
-        const batch = db.batch();
-        batch.set(requestRef, {
-          requestId: requestRef.id,
-          question: question.trim(),
-          status: 'pending',
-          slideIndex: currentSlideIndex,
-          workKey,
-          helperUid: null,
-          createdAt: now,
-          updatedAt: now
-        });
-        batch.set(db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners').doc(requestRef.id), {
-          requesterUid: signedInUser.uid,
-          createdAt: now
-        });
-        batch.set(requestRef.collection('slides').doc(`slide_${currentSlideIndex}`), {
-          canvasData: exportCanvasJpeg(),
-          updatedAt: now
-        });
-        batch.set(peerHelpLockRef(workKey), { requestId: requestRef.id, workKey, status: 'pending', createdAt: now, updatedAt: now });
-        batch.set(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid), {
-          activeHelpLockKey: workKey
-        }, { merge: true });
-        await batch.commit();
-        document.getElementById('askForHelpModal').classList.add('hidden');
-        document.getElementById('askForHelpForm').reset();
-        showToast('Peer Help request sent. Your identity is hidden from other students.', 'success');
-        startPeerHelpListeners();
-      } catch (err) {
-        console.error('Could not create Peer Help request:', err);
-        showToast('Could not send help request: ' + err.message, 'error');
-      } finally {
-        button.disabled = false;
-      }
+    async function createPeerHelpRequest(question){
+      if(!signedInUser||!currentAssignmentId||currentSubmissionStatus!=='in-progress'||requesterHelpLock||hasOpenOwnedHelpRequest){showToast('You can request teacher help while actively working on an assignment.','info');return;}
+      const button=document.getElementById('createPeerHelpBtn');button.disabled=true;
+      try{
+        await flushCanvasSaveToFirestore();const assignmentRef=db.collection('assignments').doc(currentAssignmentId),requestRef=assignmentRef.collection('helpRequests').doc();
+        const workKey='wk_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10),now=firebase.firestore.FieldValue.serverTimestamp();
+        const item={requestId:requestRef.id,requesterUid:signedInUser.uid,requesterName:studentName||studentProfileName||signedInUser.displayName||'Student',question:question.trim(),status:'pending',slideIndex:currentSlideIndex,workKey,createdAt:now,updatedAt:now};
+        const batch=db.batch();batch.set(requestRef,item);batch.set(peerHelpLockRef(workKey),{requestId:requestRef.id,workKey,status:'pending',createdAt:now,updatedAt:now});
+        batch.set(assignmentRef.collection('students').doc(signedInUser.uid),{activeHelpLockKey:workKey},{merge:true});await batch.commit();
+        document.getElementById('askForHelpModal').classList.add('hidden');document.getElementById('askForHelpForm').reset();
+        ownedHelpRequestState.set(requestRef.id,{...item,id:requestRef.id});renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
+        showToast('Teacher-help request sent. Only your teacher can view and handle it.','success');
+      }catch(err){console.error('Could not create teacher-help request:',err);showToast('Could not send help request: '+err.message,'error');}finally{button.disabled=false;}
     }
 
-    async function claimPeerHelpRequest(requestId) {
-      if (!signedInUser || currentSubmissionStatus !== 'completed' || activeHelpRequestId) return;
-      try {
-        const ref = peerHelpRequestRef(requestId);
-        await db.runTransaction(async transaction => {
-          const doc = await transaction.get(ref);
-          if (!doc.exists || doc.data().status !== 'pending') throw new Error('This request has already been claimed.');
-          const lockRef = peerHelpLockRef(doc.data().workKey);
-          const lockDoc = await transaction.get(lockRef);
-          if (!lockDoc.exists || lockDoc.data().status !== 'pending') throw new Error('This request is no longer available.');
-          const now = firebase.firestore.FieldValue.serverTimestamp();
-          transaction.update(ref, {
-            status: 'helping',
-            helperUid: signedInUser.uid,
-            claimedAt: now,
-            updatedAt: now
-          });
-          transaction.update(lockRef, { status: 'helping', helperUid: signedInUser.uid, updatedAt: now });
-        });
-        const snapshot = await ref.get();
-        activeHelpRequestId = requestId;
-        activeHelpRequestData = snapshot.data();
-        activeHelpMode = 'helper';
-        currentSlideIndex = Number(activeHelpRequestData.slideIndex || 0);
-        watchActiveHelpSession(requestId);
-        document.getElementById('workspaceSubtext').textContent = 'Helping anonymously • Use the locked rose-colour pen, then Submit Help';
-        updatePeerHelpControls();
-        setupSlideWorkspace();
-        showToast('You are now helping a peer. Your annotation colour is locked.', 'success');
-      } catch (err) {
-        console.error('Could not claim Peer Help request:', err);
-        showToast('Could not open help request: ' + err.message, 'error');
-      }
+    async function claimPeerHelpRequest(requestId){showToast('Student-to-student help is disabled. Only your teacher can handle requests.','info');}
+
+    async function claimPeerHelpRequestAsTeacher(requestId){
+      if(!signedInUser||currentUserRole!=='teacher'||!currentAssignmentId||activeHelpRequestId)return;
+      try{
+        const ref=peerHelpRequestRef(requestId),now=firebase.firestore.FieldValue.serverTimestamp();let data=null;
+        await db.runTransaction(async tx=>{const doc=await tx.get(ref);if(!doc.exists||doc.data().status!=='pending'||!doc.data().requesterUid)throw new Error('This request is unavailable or belongs to the older Peer Help workflow.');
+          data=doc.data();const lockRef=peerHelpLockRef(data.workKey),lock=await tx.get(lockRef);if(!lock.exists||lock.data().status!=='pending')throw new Error('This request is no longer available.');
+          tx.update(ref,{status:'helping',claimedAt:now,updatedAt:now});tx.update(lockRef,{status:'helping',updatedAt:now});});
+        activeHelpRequestId=requestId;activeHelpRequestData=data;activeHelpMode='teacher';studentId=data.requesterUid;studentName=data.requesterName||'Student';inspectingStudentId=data.requesterUid;currentSlideIndex=Number(data.slideIndex||0);requesterHelpLock=false;
+        teacherDashboard.classList.add('hidden');studentJoinScreen.classList.add('hidden');studentHistoryScreen.classList.add('hidden');workspaceScreen.classList.remove('hidden');
+        document.getElementById('workspaceSubtext').textContent='Teacher Help • Annotate with the locked rose-colour pen, then click Finish Help';updatePeerHelpControls();setupSlideWorkspace();
+        showToast('Teacher-help session opened. Annotations are saved only when you click Finish Help.','success');
+      }catch(err){console.error('Could not open teacher-help session:',err);showToast('Could not open help request: '+err.message,'error');}
     }
 
-    async function claimPeerHelpRequestAsTeacher(requestId) {
-      if (!signedInUser || currentUserRole !== 'teacher' || !currentAssignmentId || activeHelpRequestId) return;
-      try {
-        const ref = peerHelpRequestRef(requestId);
-        const ownerRef = peerHelpOwnerRef(requestId);
-        const ownerSnapshot = await ownerRef.get();
-        if (!ownerSnapshot.exists || !ownerSnapshot.data().requesterUid) {
-          throw new Error('The requester record could not be found.');
-        }
-        const requesterUid = ownerSnapshot.data().requesterUid;
-        const now = firebase.firestore.FieldValue.serverTimestamp();
-        await db.runTransaction(async transaction => {
-          const requestDoc = await transaction.get(ref);
-          if (!requestDoc.exists || requestDoc.data().status !== 'pending') {
-            throw new Error('This request has already been claimed or closed.');
-          }
-          const lockRef = peerHelpLockRef(requestDoc.data().workKey);
-          const lockDoc = await transaction.get(lockRef);
-          if (!lockDoc.exists || lockDoc.data().status !== 'pending') {
-            throw new Error('This request is no longer available.');
-          }
-          transaction.update(ref, {
-            status: 'helping',
-            helperUid: signedInUser.uid,
-            claimedAt: now,
-            updatedAt: now
-          });
-          transaction.update(lockRef, {
-            status: 'helping',
-            helperUid: signedInUser.uid,
-            updatedAt: now
-          });
-        });
-        const snapshot = await ref.get();
-        activeHelpRequestId = requestId;
-        activeHelpRequestData = snapshot.data();
-        activeHelpMode = 'teacher';
-        studentId = requesterUid;
-        inspectingStudentId = requesterUid;
-        currentSlideIndex = Number(activeHelpRequestData.slideIndex || 0);
-        teacherDashboard.classList.add('hidden');
-        studentJoinScreen.classList.add('hidden');
-        studentHistoryScreen.classList.add('hidden');
-        workspaceScreen.classList.remove('hidden');
-        watchActiveHelpSession(requestId);
-        document.getElementById('workspaceSubtext').textContent = 'Helping a student • Use the locked rose-colour pen, then Submit Help';
-        updatePeerHelpControls();
-        setupSlideWorkspace();
-        showToast('Help session opened. Your annotation colour is locked.', 'success');
-      } catch (err) {
-        console.error('Could not open teacher Peer Help session:', err);
-        showToast('Could not open help request: ' + err.message, 'error');
-      }
+    async function saveActiveHelpCanvasNow(){
+      if(activeHelpMode!=='teacher'||!activeHelpRequestId)return;
+      localStorage.setItem('step_teacher_help_draft_'+currentAssignmentId+'_'+activeHelpRequestId+'_'+currentSlideIndex,exportCanvasJpeg());
     }
 
-    async function saveActiveHelpCanvasNow() {
-      if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
-      clearTimeout(saveTimeout);
-      const dataUrl = exportCanvasJpeg();
-      const now = firebase.firestore.FieldValue.serverTimestamp();
-      await db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(activeHelpRequestId)
-        .collection('slides').doc(`slide_${currentSlideIndex}`)
-        .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
-      if (activeHelpMode === 'helper') {
-        await peerHelpRequestRef(activeHelpRequestId).update({ lastActivityAt: now, updatedAt: now });
-      }
+    async function submitPeerHelp(requestId,asTeacher=false){
+      if(!asTeacher||activeHelpMode!=='teacher'||activeHelpRequestId!==requestId||!activeHelpRequestData){showToast('Only the teacher handling this request can finish it.','error');return;}
+      const button=document.getElementById('teacherSubmitPeerHelpBtn');if(button)button.disabled=true;
+      try{
+        if(saveTimeout!==null){clearTimeout(saveTimeout);saveTimeout=null;}
+        const canvasData=exportCanvasJpeg(),assignmentRef=db.collection('assignments').doc(currentAssignmentId),requestRef=assignmentRef.collection('helpRequests').doc(requestId);
+        const lockRef=peerHelpLockRef(activeHelpRequestData.workKey),studentRef=assignmentRef.collection('students').doc(activeHelpRequestData.requesterUid),slideRef=studentRef.collection('slides').doc('slide_'+currentSlideIndex);
+        const now=firebase.firestore.FieldValue.serverTimestamp(),batch=db.batch();
+        batch.set(slideRef,{canvasData,updatedAt:now,teacherAnnotatedAt:now,teacherAnnotatedBy:signedInUser.uid,teacherHelpRequestId:requestId},{merge:true});
+        batch.update(requestRef,{status:'submitted',submittedAt:now,updatedAt:now});batch.update(lockRef,{status:'submitted',updatedAt:now});batch.update(studentRef,{activeHelpLockKey:firebase.firestore.FieldValue.delete()});await batch.commit();
+        localStorage.removeItem('step_teacher_help_draft_'+currentAssignmentId+'_'+requestId+'_'+currentSlideIndex);
+        if(unsubSlideWork){unsubSlideWork();unsubSlideWork=null;}activeHelpRequestId=null;activeHelpRequestData=null;activeHelpMode=null;isDrawing=false;
+        updatePeerHelpControls();loadCurrentSlideData();document.getElementById('workspaceSubtext').textContent='Assignment workspace • Teacher annotations saved';
+        showToast('Teacher annotations saved to the student’s work.','success');document.getElementById('exitWorkspaceBtn').click();
+      }catch(err){console.error('Could not finish teacher help:',err);showToast('Could not save teacher annotations: '+err.message,'error');}finally{if(button)button.disabled=false;}
     }
 
-    async function submitPeerHelp(requestId, asTeacher = false) {
-      if (!signedInUser || !currentAssignmentId) return;
-      const helperButton = document.getElementById('submitPeerHelpBtn');
-      const teacherButton = document.getElementById('teacherSubmitPeerHelpBtn');
-      if (helperButton) helperButton.disabled = true;
-      if (teacherButton) teacherButton.disabled = true;
-      try {
-        if (!asTeacher || (activeHelpMode === 'teacher' && activeHelpRequestId === requestId)) {
-          await saveActiveHelpCanvasNow();
-        }
-        const ref = peerHelpRequestRef(requestId);
-        const now = firebase.firestore.FieldValue.serverTimestamp();
-        if (asTeacher) {
-          await db.runTransaction(async transaction => {
-            const doc = await transaction.get(ref);
-            if (!doc.exists || doc.data().status !== 'helping') throw new Error('This help session is no longer active.');
-            const lockRef = peerHelpLockRef(doc.data().workKey);
-            const lockDoc = await transaction.get(lockRef);
-            if (!lockDoc.exists || lockDoc.data().status !== 'helping') throw new Error('The session lock is no longer active.');
-            transaction.update(ref, {
-              status: 'submitted',
-              submittedAt: now,
-              updatedAt: now,
-              teacherSubmittedBy: signedInUser.uid,
-              teacherSubmittedAt: now
-            });
-            transaction.update(lockRef, { status: 'submitted', updatedAt: now });
-            transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`teacher_submitted_${requestId}`), {
-              eventType: 'teacher-submitted-on-behalf',
-              assignmentId: currentAssignmentId,
-              requestId,
-              helperUid: doc.data().helperUid,
-              teacherUid: signedInUser.uid,
-              createdAt: now
-            });
-          });
-        } else {
-          await db.runTransaction(async transaction => {
-            const doc = await transaction.get(ref);
-            if (!doc.exists || doc.data().status !== 'helping' || doc.data().helperUid !== signedInUser.uid) {
-              throw new Error('You are no longer the assigned helper for this request.');
-            }
-            const lockRef = peerHelpLockRef(doc.data().workKey);
-            const lockDoc = await transaction.get(lockRef);
-            if (!lockDoc.exists || lockDoc.data().status !== 'helping') throw new Error('The session lock is no longer active.');
-            transaction.update(ref, { status: 'submitted', submittedAt: now, updatedAt: now });
-            transaction.update(lockRef, { status: 'submitted', updatedAt: now });
-            transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`help_submitted_${requestId}`), {
-              eventType: 'help-submitted',
-              assignmentId: currentAssignmentId,
-              requestId,
-              helperUid: signedInUser.uid,
-              createdAt: now
-            });
-          });
-        }
-        if (!asTeacher) {
-          if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
-          activeHelpRequestId = null;
-          activeHelpRequestData = null;
-          activeHelpMode = null;
-          updatePeerHelpControls();
-          loadCurrentSlideData();
-          document.getElementById('workspaceSubtext').textContent = 'Assignment workspace • Your own work remains unchanged';
-        }
-        showToast(asTeacher ? 'Help session submitted on behalf of the helper.' : 'Help submitted. The requester can now continue working.', 'success');
-      } catch (err) {
-        console.error('Could not submit Peer Help:', err);
-        showToast('Could not submit help: ' + err.message, 'error');
-      } finally {
-        if (helperButton) helperButton.disabled = false;
-        if (teacherButton) teacherButton.disabled = false;
-      }
-    }
+    async function acknowledgePeerHelp(requestId){return;}
 
     async function acknowledgePeerHelp(requestId) {
       if (!signedInUser || !currentAssignmentId) return;
@@ -2986,87 +2560,24 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
-    async function expirePeerHelpRequest(requestId) {
-      if (!signedInUser || currentUserRole !== 'teacher') return;
-      if (!confirm('Expire this help request? The requester will be able to continue working.')) return;
-      try {
-        const ref = peerHelpRequestRef(requestId);
-        await db.runTransaction(async transaction => {
-          const doc = await transaction.get(ref);
-          if (!doc.exists || !['pending', 'helping'].includes(doc.data().status)) throw new Error('This request is no longer active.');
-          const lockRef = peerHelpLockRef(doc.data().workKey);
-          const lockDoc = await transaction.get(lockRef);
-          const now = firebase.firestore.FieldValue.serverTimestamp();
-          transaction.update(ref, { status: 'expired', expiredAt: now, updatedAt: now });
-          if (lockDoc.exists) transaction.update(lockRef, { status: 'expired', updatedAt: now });
-        });
-        showToast('Peer Help request expired.', 'success');
-      } catch (err) {
-        showToast('Could not expire request: ' + err.message, 'error');
-      }
+    async function expirePeerHelpRequest(requestId){
+      if(!signedInUser||currentUserRole!=='teacher')return;if(!confirm('Close this teacher-help request? The student will be able to continue working.'))return;
+      try{const ref=peerHelpRequestRef(requestId);await db.runTransaction(async tx=>{const doc=await tx.get(ref);if(!doc.exists||!['pending','helping'].includes(doc.data().status))throw new Error('This request is no longer active.');
+        const data=doc.data(),lockRef=peerHelpLockRef(data.workKey),lock=await tx.get(lockRef),now=firebase.firestore.FieldValue.serverTimestamp();
+        tx.update(ref,{status:'expired',expiredAt:now,updatedAt:now});if(lock.exists)tx.update(lockRef,{status:'expired',updatedAt:now});
+        if(data.requesterUid)tx.update(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(data.requesterUid),{activeHelpLockKey:firebase.firestore.FieldValue.delete()});});
+        showToast('Teacher-help request closed.','success');
+      }catch(err){showToast('Could not close request: '+err.message,'error');}
     }
 
-    function watchActiveHelpSession(requestId) {
-      if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
-      if (!db || !requestId) return;
-      unsubActiveHelpSession = peerHelpRequestRef(requestId).onSnapshot(snapshot => {
-        if (!snapshot.exists || activeHelpRequestId !== requestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
-        const status = snapshot.data().status;
-        if (status === 'helping') return;
-        if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
-        isDrawing = false;
-        activeHelpRequestId = null;
-        activeHelpRequestData = null;
-        activeHelpMode = null;
-        updatePeerHelpControls();
-        loadCurrentSlideData();
-        if (status === 'submitted') {
-          document.getElementById('workspaceSubtext').textContent = 'Help session finalised. Your own assignment canvas is restored.';
-          showToast('The help session was finalised. Your annotation workspace is now read-only again.', 'info');
-        } else if (status === 'expired') {
-          document.getElementById('workspaceSubtext').textContent = 'Help session released by the teacher.';
-          showToast('The teacher released this help session.', 'info');
-        }
-      }, err => console.warn('Active Peer Help session listener:', err));
-    }
+    function watchActiveHelpSession(requestId){return;}
 
-    function startTeacherHelpMonitor(assignmentId) {
-      if (!db || !signedInUser || currentUserRole !== 'teacher' || !assignmentId) return;
-      if (unsubTeacherHelpRequests && teacherHelpListeningAssignmentId === assignmentId) return;
-      if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
-      teacherHelpListeningAssignmentId = assignmentId;
-      const assignmentRef = db.collection('assignments').doc(assignmentId);
-      // Monitor actionable requests only and cache requester labels between snapshots.
-      unsubTeacherHelpRequests = assignmentRef.collection('helpRequests')
-        .where('status', 'in', ['pending', 'helping', 'submitted'])
-        .limit(25)
-        .onSnapshot(async snapshot => {
-          const requests = await Promise.all(snapshot.docs.map(async d => {
-            const data = { id: d.id, ...d.data() };
-            if (teacherRequesterLabelCache.has(d.id)) {
-              data.requesterLabel = teacherRequesterLabelCache.get(d.id);
-              return data;
-            }
-            try {
-              const owner = await assignmentRef.collection('helpRequestOwners').doc(d.id).get();
-              let label = 'Student';
-              if (owner.exists && owner.data().requesterUid) {
-                const student = await assignmentRef.collection('students').doc(owner.data().requesterUid).get();
-                label = student.exists ? (student.data().name || 'Student') : 'Student';
-              }
-              teacherRequesterLabelCache.set(d.id, label);
-              data.requesterLabel = label;
-            } catch (err) {
-              console.warn('Could not resolve requester for teacher view:', err);
-            }
-            return data;
-          }));
-          renderPeerHelpRequests(requests, 'teacher');
-        }, err => {
-          console.warn('Teacher Peer Help monitor:', err);
-          const target = document.getElementById('teacherPeerHelpList');
-          if (target) target.innerHTML = '<p class="text-sm text-rose-600">Could not load Peer Help requests. Check Firestore rules.</p>';
-        });
+    function startTeacherHelpMonitor(assignmentId){
+      if(!db||!signedInUser||currentUserRole!=='teacher'||!assignmentId)return;
+      if(unsubTeacherHelpRequests&&teacherHelpListeningAssignmentId===assignmentId)return;
+      if(unsubTeacherHelpRequests){unsubTeacherHelpRequests();unsubTeacherHelpRequests=null;}teacherHelpListeningAssignmentId=assignmentId;
+      unsubTeacherHelpRequests=db.collection('assignments').doc(assignmentId).collection('helpRequests').where('status','in',['pending','helping']).limit(25)
+        .onSnapshot(snap=>renderPeerHelpRequests(snap.docs.map(d=>({id:d.id,...d.data()})),'teacher'),err=>{console.warn('Teacher Help monitor:',err);const t=document.getElementById('teacherPeerHelpList');if(t)t.innerHTML='<p class="text-sm text-rose-600">Could not load teacher-help requests. Check Firestore rules.</p>';});
     }
 
     document.getElementById('askForHelpBtn').addEventListener('click', () => {
