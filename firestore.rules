@@ -26,28 +26,8 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid));
     }
 
-    function helpOwnerPath(assignmentId, requestId) {
-      return /databases/$(database)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId);
-    }
-
     function helpLockPath(assignmentId, workKey) {
       return /databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(workKey);
-    }
-
-    function peerHelpEventPath(uid, eventId) {
-      return /databases/$(database)/documents/users/$(uid)/peerHelpEvents/$(eventId);
-    }
-
-    function isHelpRequester(assignmentId, requestId) {
-      return signedIn()
-        && exists(helpOwnerPath(assignmentId, requestId))
-        && get(helpOwnerPath(assignmentId, requestId)).data.requesterUid == request.auth.uid;
-    }
-
-    function isCompletedPeer(assignmentId) {
-      return signedIn()
-        && exists(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid))
-        && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'completed';
     }
 
     match /users/{uid} {
@@ -238,8 +218,7 @@ service cloud.firestore {
       // Only the assignment owner can claim, finish, or close a request.
       match /helpRequests/{requestId} {
         allow get: if ownsAssignment(assignmentId)
-          || (signedIn() && resource.data.requesterUid == request.auth.uid)
-          || isHelpRequester(assignmentId, requestId);
+          || (signedIn() && resource.data.requesterUid == request.auth.uid);
 
         allow list: if ownsAssignment(assignmentId)
           || (signedIn() && resource.data.requesterUid == request.auth.uid);
@@ -285,9 +264,7 @@ service cloud.firestore {
 
       // Lock documents only coordinate the student's own request and the assignment teacher.
       match /helpLocks/{workKey} {
-        allow get: if ownsAssignment(assignmentId)
-          || (signedIn() && resource.data.requesterUid == request.auth.uid)
-          || isHelpRequester(assignmentId, resource.data.requestId);
+        allow get: if ownsAssignment(assignmentId);
         allow list: if false;
 
         allow create: if signedIn()
