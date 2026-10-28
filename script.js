@@ -1283,6 +1283,7 @@ async function loadAssignmentProgressCounts(assignment) {
       currentAssignedStudentKey = assignedDoc.exists ? assignedKey : null;
       currentSubmissionStatus = assignedStatus === 'assignment-started' ? 'in-progress' : assignedStatus;
       window.currentStudentHelpRequested = Boolean(membership.helpRequested);
+      window.currentStudentHelpQuestion = membership.helpQuestion || '';
       updateSubmitAssignmentButton();
 
       studentJoinScreen.classList.add('hidden');
@@ -1385,6 +1386,7 @@ async function loadAssignmentProgressCounts(assignment) {
           }, { merge: true });
         const joinedStudentDoc = await joinedStudentRef.get();
         window.currentStudentHelpRequested = Boolean(joinedStudentDoc.exists && joinedStudentDoc.data().helpRequested);
+        window.currentStudentHelpQuestion = joinedStudentDoc.exists ? (joinedStudentDoc.data().helpQuestion || '') : '';
 
         // Assignment content is readable only after the student's membership exists.
         const assignmentDoc = await db.collection('assignments').doc(matchedDocId).get();
@@ -2330,8 +2332,8 @@ async function loadAssignmentProgressCounts(assignment) {
       const requested=Boolean(window.currentStudentHelpRequested);
       if(ask){
         ask.classList.toggle('hidden',!isStudent||currentSubmissionStatus!=='in-progress');
-        ask.disabled=requested;
-        ask.innerHTML=requested?'<i class="fa-solid fa-hand mr-1"></i> Hand Raised':'<i class="fa-solid fa-hand mr-1"></i> Need Help';
+        ask.disabled=false;
+        ask.innerHTML=requested?'<i class="fa-solid fa-hand mr-1"></i> Hand Raised · Update':'<i class="fa-solid fa-hand mr-1"></i> Need Help';
         ask.classList.toggle('opacity-70',requested);
       }
       const record=window.currentInspectedStudentRecord;
@@ -2353,6 +2355,7 @@ async function loadAssignmentProgressCounts(assignment) {
           helpRequestedAt:firebase.firestore.FieldValue.serverTimestamp()
         },{merge:true});
         window.currentStudentHelpRequested=true;
+        window.currentStudentHelpQuestion=String(question||'').trim().slice(0,500);
         document.getElementById('askForHelpModal').classList.add('hidden');
         document.getElementById('askForHelpForm').reset();
         updatePeerHelpControls();
@@ -2364,9 +2367,12 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     document.getElementById('askForHelpBtn').addEventListener('click',()=>{
-      if(window.currentStudentHelpRequested){showToast('Your teacher has already been notified.','info');return;}
+      const input=document.getElementById('peerHelpQuestionInput');
+      input.value=window.currentStudentHelpRequested?(window.currentStudentHelpQuestion||''):'';
+      document.getElementById('askForHelpTitle').textContent=window.currentStudentHelpRequested?'Update your help request':'Ask your teacher for help';
+      document.getElementById('createPeerHelpBtn').textContent=window.currentStudentHelpRequested?'Update request':'Send to Teacher';
       document.getElementById('askForHelpModal').classList.remove('hidden');
-      document.getElementById('peerHelpQuestionInput').focus();
+      input.focus();
     });
     document.getElementById('closeAskForHelpBtn').addEventListener('click',()=>document.getElementById('askForHelpModal').classList.add('hidden'));
     document.getElementById('cancelAskForHelpBtn').addEventListener('click',()=>document.getElementById('askForHelpModal').classList.add('hidden'));
