@@ -2358,7 +2358,10 @@ async function loadAssignmentProgressCounts(assignment) {
             addAction('Submit on behalf', 'px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold', () => submitPeerHelp(item.id, true));
             addAction('Release lock', 'px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold', () => expirePeerHelpRequest(item.id));
           }
-          if (item.status === 'pending') addAction('Expire request', 'px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold', () => expirePeerHelpRequest(item.id));
+          if (item.status === 'pending') {
+            addAction('Help this student', 'px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-semibold', () => claimPeerHelpRequestAsTeacher(item.id));
+            addAction('Expire request', 'px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold', () => expirePeerHelpRequest(item.id));
+          }
           const activityStamp = item.lastActivityAt || item.claimedAt;
           const elapsed = activityStamp?.toDate ? Math.max(0, Math.round((Date.now() - activityStamp.toDate().getTime()) / 60000)) : null;
           if (item.status === 'helping' && elapsed !== null) {
@@ -2402,9 +2405,8 @@ async function loadAssignmentProgressCounts(assignment) {
 
       const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
       if (currentUserRole === 'teacher') {
-        unsubHelpRequests = requestsRef.onSnapshot(snapshot => {
-          renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-        }, err => console.warn('Peer Help request listener:', err));
+        // The teacher monitor resolves requester labels and renders teacher-only actions.
+        startTeacherHelpMonitor(currentAssignmentId);
       } else if (currentSubmissionStatus === 'completed') {
         unsubHelpRequests = requestsRef.where('status', '==', 'pending').onSnapshot(snapshot => {
           renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -2595,6 +2597,62 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
+    async function claimPeerHelpRequestAsTeacher(requestId) {
+      if (!signedInUser || currentUserRole !== 'teacher' || !currentAssignmentId || activeHelpRequestId) return;
+      try {
+        const ref = peerHelpRequestRef(requestId);
+        const ownerRef = peerHelpOwnerRef(requestId);
+        const ownerSnapshot = await ownerRef.get();
+        if (!ownerSnapshot.exists || !ownerSnapshot.data().requesterUid) {
+          throw new Error('The requester record could not be found.');
+        }
+        const requesterUid = ownerSnapshot.data().requesterUid;
+        const now = firebase.firestore.FieldValue.serverTimestamp();
+        await db.runTransaction(async transaction => {
+          const requestDoc = await transaction.get(ref);
+          if (!requestDoc.exists || requestDoc.data().status !== 'pending') {
+            throw new Error('This request has already been claimed or closed.');
+          }
+          const lockRef = peerHelpLockRef(requestDoc.data().workKey);
+          const lockDoc = await transaction.get(lockRef);
+          if (!lockDoc.exists || lockDoc.data().status !== 'pending') {
+            throw new Error('This request is no longer available.');
+          }
+          transaction.update(ref, {
+            status: 'helping',
+            helperUid: signedInUser.uid,
+            claimedAt: now,
+            updatedAt: now,
+            teacherHelper: true
+          });
+          transaction.update(lockRef, {
+            status: 'helping',
+            helperUid: signedInUser.uid,
+            updatedAt: now
+          });
+        });
+        const snapshot = await ref.get();
+        activeHelpRequestId = requestId;
+        activeHelpRequestData = snapshot.data();
+        activeHelpMode = 'teacher';
+        studentId = requesterUid;
+        inspectingStudentId = requesterUid;
+        currentSlideIndex = Number(activeHelpRequestData.slideIndex || 0);
+        teacherDashboard.classList.add('hidden');
+        studentJoinScreen.classList.add('hidden');
+        studentHistoryScreen.classList.add('hidden');
+        workspaceScreen.classList.remove('hidden');
+        watchActiveHelpSession(requestId);
+        document.getElementById('workspaceSubtext').textContent = 'Helping a student • Use the locked rose-colour pen, then Submit Help';
+        updatePeerHelpControls();
+        setupSlideWorkspace();
+        showToast('Help session opened. Your annotation colour is locked.', 'success');
+      } catch (err) {
+        console.error('Could not open teacher Peer Help session:', err);
+        showToast('Could not open help request: ' + err.message, 'error');
+      }
+    }
+
     async function saveActiveHelpCanvasNow() {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
       clearTimeout(saveTimeout);
@@ -2615,7 +2673,9 @@ async function loadAssignmentProgressCounts(assignment) {
       if (helperButton) helperButton.disabled = true;
       if (teacherButton) teacherButton.disabled = true;
       try {
-        if (!asTeacher) await saveActiveHelpCanvasNow();
+        if (!asTeacher || (activeHelpMode === 'teacher' && activeHelpRequestId === requestId)) {
+          await saveActiveHelpCanvasNow();
+        }
         const ref = peerHelpRequestRef(requestId);
         const now = firebase.firestore.FieldValue.serverTimestamp();
         if (asTeacher) {
@@ -2735,7 +2795,7 @@ async function loadAssignmentProgressCounts(assignment) {
       if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
       if (!db || !requestId) return;
       unsubActiveHelpSession = peerHelpRequestRef(requestId).onSnapshot(snapshot => {
-        if (!snapshot.exists || activeHelpRequestId !== requestId || activeHelpMode !== 'helper') return;
+        if (!snapshot.exists || activeHelpRequestId !== requestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
         const status = snapshot.data().status;
         if (status === 'helping') return;
         if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
