@@ -242,10 +242,8 @@
     const ownedHelpRequestState = new Map();
     let unsubHelpRequests = null;
     let unsubOwnedHelpRequests = null;
-    const ownedHelpRequestListeners = new Map();
-    const finishedOwnedHelpRequestListeners = new Set();
+    let ownedHelpRequestListeners = [];
     let unsubTeacherHelpRequests = null;
-    const teacherRequesterLabelCache = new Map();
     let unsubActiveHelpSession = null;
     let peerHelpListeningAssignmentId = null;
     const copiedHelpResults = new Set();
@@ -1630,7 +1628,7 @@ async function loadAssignmentProgressCounts(assignment) {
       if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
       if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
       ownedHelpRequestListeners.forEach(unsub => unsub());
-      ownedHelpRequestListeners.clear();
+      ownedHelpRequestListeners = [];
       workspaceScreen.classList.add('hidden');
       if (inspectingStudentId) {
         teacherDashboard.classList.remove('hidden');
@@ -2539,51 +2537,36 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function startPeerHelpListeners() {
       if (!db || !signedInUser || !currentAssignmentId) return;
-      const assignmentChanged = peerHelpListeningAssignmentId !== currentAssignmentId;
-      if (assignmentChanged) {
-        if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
-        if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
-        if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
-        ownedHelpRequestListeners.forEach(unsub => unsub());
-        ownedHelpRequestListeners.clear();
-        finishedOwnedHelpRequestListeners.clear();
-        ownedHelpRequestState.clear();
-        teacherRequesterLabelCache.clear();
+      if (peerHelpListeningAssignmentId !== currentAssignmentId) {
         requesterHelpLock = false;
         peerHelpListeningAssignmentId = currentAssignmentId;
-      } else if (unsubHelpRequests) {
-        unsubHelpRequests();
-        unsubHelpRequests = null;
       }
+      if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
+      if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
+      ownedHelpRequestListeners.forEach(unsub => unsub());
+      ownedHelpRequestListeners = [];
       const panel = document.getElementById('peerHelpPanel');
       if (panel) panel.classList.remove('hidden');
 
       const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
       if (currentUserRole === 'teacher') {
+        // The teacher monitor resolves requester labels and renders teacher-only actions.
         startTeacherHelpMonitor(currentAssignmentId);
       } else if (currentSubmissionStatus === 'completed') {
-        // Fetch only on opening/refresh; do not keep an assignment-wide request listener open.
-        requestsRef.where('status', '==', 'pending').limit(10).get().then(snapshot => {
+        unsubHelpRequests = requestsRef.where('status', '==', 'pending').onSnapshot(snapshot => {
           renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-        }).catch(err => console.warn('Available Peer Help fetch:', err));
+        }, err => console.warn('Available Peer Help listener:', err));
       } else {
         const list = document.getElementById('peerHelpRequestList');
         if (list) list.innerHTML = '<p class="text-sm text-slate-500">Only students who completed this assignment can help. Your requests will appear here.</p>';
       }
 
-      if (unsubOwnedHelpRequests) return;
       const ownersRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners');
       unsubOwnedHelpRequests = ownersRef.where('requesterUid', '==', signedInUser.uid).onSnapshot(snapshot => {
-        const ownerIds = new Set(snapshot.docs.map(d => d.id));
-        ownedHelpRequestListeners.forEach((unsub, requestId) => {
-          if (!ownerIds.has(requestId)) {
-            unsub();
-            ownedHelpRequestListeners.delete(requestId);
-            ownedHelpRequestState.delete(requestId);
-          }
-        });
+        ownedHelpRequestListeners.forEach(unsub => unsub());
+        ownedHelpRequestListeners = [];
+        ownedHelpRequestState.clear();
         snapshot.docs.forEach(ownerDoc => {
-          if (ownedHelpRequestListeners.has(ownerDoc.id) || finishedOwnedHelpRequestListeners.has(ownerDoc.id)) return;
           const unsub = requestsRef.doc(ownerDoc.id).onSnapshot(async requestDoc => {
             if (!requestDoc.exists) return;
             const data = requestDoc.data();
@@ -2628,17 +2611,11 @@ async function loadAssignmentProgressCounts(assignment) {
             } else if (['acknowledged', 'expired'].includes(data.status)) {
               requesterHelpLock = false;
               updatePeerHelpControls();
-              const stopListening = ownedHelpRequestListeners.get(requestDoc.id);
-              if (stopListening) {
-                stopListening();
-                ownedHelpRequestListeners.delete(requestDoc.id);
-                finishedOwnedHelpRequestListeners.add(requestDoc.id);
-              }
             }
             ownedHelpRequestState.set(item.id, item);
             renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
           }, err => console.warn('Owned Peer Help listener:', err));
-          ownedHelpRequestListeners.set(ownerDoc.id, unsub);
+          ownedHelpRequestListeners.push(unsub);
         });
         if (!snapshot.docs.length) {
           hasOpenOwnedHelpRequest = false;
@@ -2983,33 +2960,20 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function startTeacherHelpMonitor(assignmentId) {
-      if (!db || !signedInUser || currentUserRole !== 'teacher' || !assignmentId) return;
-      if (unsubTeacherHelpRequests && peerHelpListeningAssignmentId === assignmentId) return;
       if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
+      if (!db || !signedInUser || currentUserRole !== 'teacher' || !assignmentId) return;
       const assignmentRef = db.collection('assignments').doc(assignmentId);
-      // Only monitor actionable requests; cache requester labels to avoid repeated profile reads.
       unsubTeacherHelpRequests = assignmentRef.collection('helpRequests')
-        .where('status', 'in', ['pending', 'helping', 'submitted'])
-        .limit(25)
         .onSnapshot(async snapshot => {
           const requests = await Promise.all(snapshot.docs.map(async d => {
             const data = { id: d.id, ...d.data() };
-            if (teacherRequesterLabelCache.has(d.id)) {
-              data.requesterLabel = teacherRequesterLabelCache.get(d.id);
-              return data;
-            }
             try {
               const owner = await assignmentRef.collection('helpRequestOwners').doc(d.id).get();
-              let label = 'Student';
               if (owner.exists && owner.data().requesterUid) {
                 const student = await assignmentRef.collection('students').doc(owner.data().requesterUid).get();
-                label = student.exists ? (student.data().name || 'Student') : 'Student';
+                data.requesterLabel = student.exists ? (student.data().name || 'Student') : 'Student';
               }
-              teacherRequesterLabelCache.set(d.id, label);
-              data.requesterLabel = label;
-            } catch (err) {
-              console.warn('Could not resolve requester for teacher view:', err);
-            }
+            } catch (err) { console.warn('Could not resolve requester for teacher view:', err); }
             return data;
           }));
           renderPeerHelpRequests(requests, 'teacher');
