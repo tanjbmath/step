@@ -815,7 +815,7 @@
         snapshot.docs.forEach(doc => {
           const status = String((doc.data() || {}).status || '').trim().toLowerCase();
           nextStatuses.set(doc.id, status);
-          if (previousStatuses.get(doc.id) !== status) changed = true;
+          if (!previousStatuses.has(doc.id) || previousStatuses.get(doc.id) !== status) changed = true;
         });
         previousStatuses.clear();
         nextStatuses.forEach((status, id) => previousStatuses.set(id, status));
