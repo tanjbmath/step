@@ -1607,20 +1607,9 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
-    document.getElementById('prevSlideBtn').addEventListener('click', () => {
-      if (currentSlideIndex > 0) {
-        currentSlideIndex--;
-        setupSlideWorkspace();
-      }
-    });
+    document.getElementById('prevSlideBtn').addEventListener('click', async () => {\n      if (currentSlideIndex > 0) {\n        await flushCanvasSaveToFirestore();\n        currentSlideIndex--;\n        setupSlideWorkspace();\n      }\n    });
 
-    document.getElementById('nextSlideBtn').addEventListener('click', () => {
-      const totalSlides = currentAssignmentData?.slides?.length || 1;
-      if (currentSlideIndex < totalSlides - 1) {
-        currentSlideIndex++;
-        setupSlideWorkspace();
-      }
-    });
+    document.getElementById('nextSlideBtn').addEventListener('click', async () => {\n      const totalSlides = currentAssignmentData?.slides?.length || 1;\n      if (currentSlideIndex < totalSlides - 1) {\n        await flushCanvasSaveToFirestore();\n        currentSlideIndex++;\n        setupSlideWorkspace();\n      }\n    });
 
     function resizeCanvas() {
       const rect = canvasWrapper.getBoundingClientRect();
@@ -1740,17 +1729,43 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
+    // Batch canvas persistence in fixed 2-second windows.
     let saveTimeout = null;
+    let canvasSaveDirty = false;
+    let canvasSaveInFlight = Promise.resolve();
+    const CANVAS_SAVE_INTERVAL_MS = 2000;
 
     function saveCanvasToFirestore() {
       const targetStudentId = inspectingStudentId || studentId;
       if (!currentAssignmentId || !targetStudentId) return;
       if (requesterHelpLock && !activeHelpRequestId) return;
+      canvasSaveDirty = true;
+      if (saveTimeout === null) {
+        saveTimeout = setTimeout(() => {
+          saveTimeout = null;
+          flushCanvasSaveToFirestore().catch(err => {
+            console.error('Batched canvas save failed:', err);
+            showToast('Save failed. Your latest drawing may not be stored.', 'error');
+          });
+        }, CANVAS_SAVE_INTERVAL_MS);
+      }
+    }
 
-      clearTimeout(saveTimeout);
-      saveTimeout = setTimeout(async () => {
-        // JPEG does not support transparency. Export through a white-backed buffer
-        // so transparent canvas areas never become black after saving or clearing.
+    async function flushCanvasSaveToFirestore() {
+      if (saveTimeout !== null) {
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+      }
+      if (!canvasSaveDirty) return canvasSaveInFlight;
+      canvasSaveDirty = false;
+      const saveTask = canvasSaveInFlight.catch(() => {}).then(async () => {
+        const targetStudentId = inspectingStudentId || studentId;
+        const assignmentId = currentAssignmentId;
+        const slideIndex = currentSlideIndex;
+        const helpRequestId = activeHelpRequestId;
+        const helpMode = activeHelpMode;
+        if (!assignmentId || !targetStudentId || (requesterHelpLock && !helpRequestId)) return;
+
         const exportCanvas = document.createElement('canvas');
         exportCanvas.width = mainCanvas.width;
         exportCanvas.height = mainCanvas.height;
@@ -1758,66 +1773,64 @@ async function loadAssignmentProgressCounts(assignment) {
         exportCtx.fillStyle = '#ffffff';
         exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
         exportCtx.drawImage(mainCanvas, 0, 0);
-        // Preserve photo detail while using JPEG compression to limit Firestore payload size.
         const dataUrl = exportCanvas.toDataURL('image/jpeg', 0.92);
-        if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
-          try {
-            await db.collection('assignments').doc(currentAssignmentId)
-              .collection('helpRequests').doc(activeHelpRequestId)
-              .collection('slides').doc(`slide_${currentSlideIndex}`)
-              .set({ canvasData: dataUrl, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
-          } catch (err) {
-            console.error('Peer Help annotation save failed:', err);
-            showToast('Could not save help annotations: ' + err.message, 'error');
-          }
+        const now = firebase.firestore.FieldValue.serverTimestamp();
+
+        if (db && helpRequestId && ['helper', 'teacher'].includes(helpMode)) {
+          await db.collection('assignments').doc(assignmentId)
+            .collection('helpRequests').doc(helpRequestId)
+            .collection('slides').doc(`slide_${slideIndex}`)
+            .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
           return;
         }
         if (requesterHelpLock) return;
         if (db && inspectingStudentId && currentUserRole === 'teacher') {
-          try {
-            const now = firebase.firestore.FieldValue.serverTimestamp();
-            await db.collection('assignments').doc(currentAssignmentId)
-              .collection('students').doc(targetStudentId)
-              .collection('slides').doc(`slide_${currentSlideIndex}`)
-              .set({ canvasData: dataUrl, updatedAt: now, teacherAnnotatedAt: now, teacherAnnotatedBy: signedInUser?.uid || null }, { merge: true });
-          } catch (err) {
-            console.error('Teacher annotation save failed:', err);
-            showToast('Could not save teacher annotation: ' + err.message, 'error');
-          }
+          await db.collection('assignments').doc(assignmentId)
+            .collection('students').doc(targetStudentId)
+            .collection('slides').doc(`slide_${slideIndex}`)
+            .set({ canvasData: dataUrl, updatedAt: now, teacherAnnotatedAt: now, teacherAnnotatedBy: signedInUser?.uid || null }, { merge: true });
           return;
         }
         if (db && signedInUser && targetStudentId === signedInUser.uid && currentSubmissionStatus === 'in-progress') {
-          try {
-            const now = firebase.firestore.FieldValue.serverTimestamp();
-            await db.collection('assignments').doc(currentAssignmentId)
-              .collection('students').doc(targetStudentId)
-              .collection('slides').doc(`slide_${currentSlideIndex}`)
-              .set({
-                canvasData: dataUrl,
-                updatedAt: now
-              }, { merge: true });
-            await db.collection('assignments').doc(currentAssignmentId)
-              .collection('students').doc(targetStudentId).set({
-                uid: targetStudentId,
-                name: studentName || signedInUser.displayName || 'Student',
-                lastWorkedAt: now
-              }, { merge: true });
-            await db.collection('users').doc(targetStudentId).collection('submissions').doc(currentAssignmentId).set({
-              assignmentId: currentAssignmentId,
-              title: currentAssignmentData.title || 'Assignment',
-              description: currentAssignmentData.description || '',
-              sessionCode: currentSessionCode || currentAssignmentData.sessionCode || '',
-              status: 'in-progress',
-              lastWorkedAt: now,
-              slideCount: (currentAssignmentData.slides || []).length
+          await db.collection('assignments').doc(assignmentId)
+            .collection('students').doc(targetStudentId)
+            .collection('slides').doc(`slide_${slideIndex}`)
+            .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
+          await db.collection('assignments').doc(assignmentId)
+            .collection('students').doc(targetStudentId).set({
+              uid: targetStudentId,
+              name: studentName || signedInUser.displayName || 'Student',
+              lastWorkedAt: now
             }, { merge: true });
-          } catch (err) {
-            console.error('Canvas save failed:', err);
-            showToast('Save failed. Your latest drawing may not be stored.', 'error');
-          }
+          await db.collection('users').doc(targetStudentId).collection('submissions').doc(assignmentId).set({
+            assignmentId,
+            title: currentAssignmentData.title || 'Assignment',
+            description: currentAssignmentData.description || '',
+            sessionCode: currentSessionCode || currentAssignmentData.sessionCode || '',
+            status: 'in-progress',
+            lastWorkedAt: now,
+            slideCount: (currentAssignmentData.slides || []).length
+          }, { merge: true });
         }
-      }, 300);
+      });
+      canvasSaveInFlight = saveTask;
+      await saveTask;
+      if (canvasSaveDirty && saveTimeout === null) {
+        saveTimeout = setTimeout(() => {
+          saveTimeout = null;
+          flushCanvasSaveToFirestore().catch(err => {
+            console.error('Batched canvas save failed:', err);
+            showToast('Save failed. Your latest drawing may not be stored.', 'error');
+          });
+        }, CANVAS_SAVE_INTERVAL_MS);
+      }
     }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        flushCanvasSaveToFirestore().catch(err => console.warn('Canvas flush on background failed:', err));
+      }
+    });
 
     // ==========================================
     // DRAWING TOOLKIT & STYLUS POINTER EVENTS
