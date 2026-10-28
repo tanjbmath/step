@@ -234,15 +234,6 @@
     let inspectingStudentId = null;
 
     // Peer Help state. Requester identity is stored only in the private owner mapping.
-    let activeHelpRequestId = null;
-    let activeHelpRequestData = null;
-    let activeHelpMode = null;
-    let requesterHelpLock = false;
-    let hasOpenOwnedHelpRequest = false;
-    const ownedHelpRequestState = new Map();
-    let unsubTeacherHelpRequests = null;
-    let teacherHelpListeningAssignmentId = null;
-    const TEACHER_HELP_COLOUR = '#e11d48';
 
     let currentSlideIndex = 0;
     let activeTool = 'pen';
@@ -1132,11 +1123,12 @@ async function loadAssignmentProgressCounts(assignment) {
             <h5 class="font-bold text-slate-800 break-words">${escapeHtml(displayName)}</h5>
             <p class="text-xs text-slate-500 break-all">${escapeHtml(student.studentEmail || student.email || '')}</p>
             <span class="inline-block mt-1 text-xs rounded-full px-2 py-1" style="${statusBadgeStyle}">${labels[String(student.status || '').trim().toLowerCase()] || 'In Progress'}</span>
-            ${student.helpRequested ? '<span class="raised-hand-badge inline-flex items-center gap-1 mt-2 rounded-full px-2.5 py-1 text-xs font-bold"><i class="fa-solid fa-hand"></i> NEEDS HELP</span><p class="mt-1 text-xs text-rose-700 whitespace-pre-wrap">' + escapeHtml(student.helpQuestion || 'Student raised a hand.') + '</p>' : ''}
           </div><span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded font-semibold whitespace-nowrap">${currentAssignmentData?.slides?.length || 1} Slides</span></div>
           <div class="h-32 bg-white border border-slate-200 rounded flex items-center justify-center overflow-hidden relative">
             ${student.isJoined ? `<img id="thumb-${student.id}" class="w-full h-full object-contain" src="" alt="Live Preview">` : '<span class="text-xs text-slate-400">Not joined yet</span>'}
+            ${student.helpRequested ? '<span class="raised-hand-badge absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"><i class="fa-solid fa-hand"></i> NEEDS HELP</span>' : ''}
           </div>
+          ${student.helpRequested ? '<p class="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-2 whitespace-pre-wrap"><strong>Question:</strong> ' + escapeHtml(student.helpQuestion || 'Student raised a hand.') + '</p>' : ''}
           <div class="flex flex-wrap gap-2">
             ${student.isJoined ? '<button type="button" class="inspect-student-btn flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">View work</button>' : ''}
             ${student.status === 'submitted' ? '<button type="button" class="mark-completed-btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">Completed</button><button type="button" class="amendments-btn bg-amber-500 hover:bg-amber-600 text-white text-xs px-3 py-2 rounded-lg font-semibold">Amendments Needed</button>' : ''}
