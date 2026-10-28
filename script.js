@@ -2506,6 +2506,10 @@ async function loadAssignmentProgressCounts(assignment) {
       if (panel) panel.classList.toggle('hidden', !currentAssignmentId || !signedInUser);
       const helperMode = activeHelpMode === 'helper';
       const teacherMode = activeHelpMode === 'teacher';
+      // Teachers inspecting a student's submitted work need the full annotation toolbar.
+      // Keep the restricted, fixed-colour toolbar only for active help sessions
+      // that are not the teacher's normal student-work inspection view.
+      const restrictedHelpMode = helperMode || (teacherMode && !inspectingStudentId);
       // A helper may also have an outstanding request of their own. That request's
       // lock must never disable the canvas while they are actively helping someone else.
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student' && !inspectingStudentId && !helperMode && !teacherMode;
@@ -2527,18 +2531,18 @@ async function loadAssignmentProgressCounts(assignment) {
       ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn', 'prevSlideBtn', 'nextSlideBtn'].forEach(id => {
         const control = document.getElementById(id);
         if (control) {
-          control.disabled = requesterIsLocked || ((helperMode || teacherMode) && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
+          control.disabled = requesterIsLocked || (restrictedHelpMode && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
         }
       });
-      // Helpers and teachers can draw with the fixed rose-colour pen; only the
-      // requester is locked while another person is actively annotating their work.
+      // Peer helpers use a fixed rose-colour pen. Teachers inspecting student work
+      // retain the normal tools and colour picker, with red selected as the default.
       if (colorPicker) {
-        colorPicker.disabled = requesterIsLocked || helperMode || teacherMode;
-        if (helperMode || teacherMode) colorPicker.value = PEER_HELP_COLOUR;
+        colorPicker.disabled = requesterIsLocked || restrictedHelpMode;
+        if (restrictedHelpMode) colorPicker.value = PEER_HELP_COLOUR;
       }
-      if (eraser) eraser.disabled = requesterIsLocked || helperMode || teacherMode;
-      if (textTool) textTool.disabled = requesterIsLocked || helperMode || teacherMode;
-      if (penTool && (requesterIsLocked || helperMode || teacherMode)) {
+      if (eraser) eraser.disabled = requesterIsLocked || restrictedHelpMode;
+      if (textTool) textTool.disabled = requesterIsLocked || restrictedHelpMode;
+      if (penTool && (requesterIsLocked || restrictedHelpMode)) {
         activeTool = 'pen';
         penTool.classList.add('bg-indigo-600', 'text-white');
         penTool.classList.remove('bg-white', 'text-slate-700');
@@ -2745,9 +2749,26 @@ async function loadAssignmentProgressCounts(assignment) {
                     }
                   });
                   item.status = 'acknowledged';
+                  // Switch the requester back to the exact slide just updated and
+                  // force a fresh subscription so the visible canvas matches Firestore.
                   currentSlideIndex = slideIndex;
                   updateSlideNavigationUI();
-                  if (!activeHelpRequestId) loadCurrentSlideData();
+                  if (!activeHelpRequestId) {
+                    loadCurrentSlideData();
+                    // Reuse the help-slide data already fetched above, avoiding an extra
+                    // Firestore read while immediately painting the saved result.
+                    const refreshedCanvasData = slideDoc.data().canvasData;
+                    if (refreshedCanvasData && !isDrawing) {
+                      const refreshedImage = new Image();
+                      refreshedImage.onload = () => {
+                        if (!isDrawing && !activeHelpRequestId && currentSlideIndex === slideIndex) {
+                          ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
+                          ctx.drawImage(refreshedImage, 0, 0, mainCanvas.width, mainCanvas.height);
+                        }
+                      };
+                      refreshedImage.src = refreshedCanvasData;
+                    }
+                  }
                 } catch (err) {
                   copiedHelpResults.delete(requestDoc.id);
                   console.error('Could not apply peer annotations to requester canvas:', err);
