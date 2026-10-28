@@ -1613,6 +1613,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     document.getElementById('exitWorkspaceBtn').addEventListener('click', () => {
+      if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
       if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
       teacherHelpListeningAssignmentId = null;
       if (activeHelpMode === 'teacher') {
@@ -1641,6 +1642,7 @@ async function loadAssignmentProgressCounts(assignment) {
       } else {
         teacherDashboard.classList.remove('hidden');
       }
+      if (currentUserRole === 'teacher' && currentAssignmentId) startTeacherHelpMonitor(currentAssignmentId);
     });
 
     // ==========================================
@@ -2396,7 +2398,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function updatePeerHelpControls() {
-      const panel=document.getElementById('peerHelpPanel'); if(panel) panel.classList.toggle('hidden',!currentAssignmentId||!signedInUser);
+      const panel=document.getElementById('peerHelpPanel'); if(panel) panel.classList.toggle('hidden',!currentAssignmentId||!signedInUser||activeHelpMode==='teacher');
       const teacherMode=activeHelpMode==='teacher', ask=document.getElementById('askForHelpBtn');
       const submitTeacher=document.getElementById('teacherSubmitPeerHelpBtn'), submitHelper=document.getElementById('submitPeerHelpBtn');
       const lockBadge=document.getElementById('peerHelpStatusBadge'), isStudent=currentUserRole==='student';
@@ -2484,6 +2486,7 @@ async function loadAssignmentProgressCounts(assignment) {
           if(!lock.exists||!['pending','helping'].includes(lock.data().status))throw new Error('This request is no longer available.');
           if(data.status==='pending'){tx.update(ref,{status:'helping',claimedAt:now,updatedAt:now});tx.update(lockRef,{status:'helping',updatedAt:now});}
         });
+        if(unsubTeacherHelpRequests){unsubTeacherHelpRequests();unsubTeacherHelpRequests=null;}teacherHelpListeningAssignmentId=null;
         activeHelpRequestId=requestId;activeHelpRequestData=data;activeHelpMode='teacher';studentId=data.requesterUid;studentName=data.requesterName||'Student';inspectingStudentId=data.requesterUid;currentSlideIndex=Number(data.slideIndex||0);requesterHelpLock=false;
         teacherDashboard.classList.add('hidden');studentJoinScreen.classList.add('hidden');studentHistoryScreen.classList.add('hidden');workspaceScreen.classList.remove('hidden');
         document.getElementById('workspaceSubtext').textContent='Teacher Help • Annotate with the locked rose-colour pen, then click Finish Help';updatePeerHelpControls();setupSlideWorkspace();
@@ -2509,7 +2512,7 @@ async function loadAssignmentProgressCounts(assignment) {
         localStorage.removeItem('step_teacher_help_draft_'+currentAssignmentId+'_'+requestId+'_'+currentSlideIndex);
         canvasSaveDirty=false;
         if(unsubSlideWork){unsubSlideWork();unsubSlideWork=null;}activeHelpRequestId=null;activeHelpRequestData=null;activeHelpMode=null;isDrawing=false;
-        updatePeerHelpControls();loadCurrentSlideData();document.getElementById('workspaceSubtext').textContent='Assignment workspace • Teacher annotations saved';
+        updatePeerHelpControls();document.getElementById('workspaceSubtext').textContent='Assignment workspace • Teacher annotations saved';
         showToast('Teacher annotations saved to the student’s work.','success');document.getElementById('exitWorkspaceBtn').click();
       }catch(err){console.error('Could not finish teacher help:',err);showToast('Could not save teacher annotations: '+err.message,'error');}finally{if(button)button.disabled=false;}
     }
