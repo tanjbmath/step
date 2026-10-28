@@ -312,6 +312,12 @@ service cloud.firestore {
             && request.resource.data.helperUid == request.auth.uid
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'helperUid', 'claimedAt', 'updatedAt'])
           ) || (
+            ownsAssignment(assignmentId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'helping'
+            && request.resource.data.helperUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'helperUid', 'claimedAt', 'updatedAt'])
+          ) || (
             signedIn()
             && resource.data.status == 'helping'
             && resource.data.helperUid == request.auth.uid
@@ -369,6 +375,14 @@ service cloud.firestore {
 
         allow update: if (
             isCompletedPeer(assignmentId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'helping'
+            && request.resource.data.helperUid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'helping'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.helperUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'helperUid', 'updatedAt'])
+          ) || (
+            ownsAssignment(assignmentId)
             && resource.data.status == 'pending'
             && request.resource.data.status == 'helping'
             && request.resource.data.helperUid == request.auth.uid
