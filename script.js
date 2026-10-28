@@ -1879,7 +1879,8 @@ async function loadAssignmentProgressCounts(assignment) {
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
 
       // Helpers must work on the requester's submitted canvas, not their own completed work.
-      if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
+      if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)
+          && !(activeHelpMode === 'teacher' && inspectingStudentId)) {
         const requestId = activeHelpRequestId;
         unsubSlideWork = db.collection('assignments').doc(currentAssignmentId)
           .collection('helpRequests').doc(requestId)
@@ -1973,7 +1974,8 @@ async function loadAssignmentProgressCounts(assignment) {
         const dataUrl = exportCanvas.toDataURL('image/jpeg', 0.92);
         const now = firebase.firestore.FieldValue.serverTimestamp();
 
-        if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
+        if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)
+            && !(activeHelpMode === 'teacher' && inspectingStudentId)) {
           await db.collection('assignments').doc(assignmentId)
             .collection('helpRequests').doc(activeHelpRequestId)
             .collection('slides').doc(`slide_${slideIndex}`)
@@ -2984,16 +2986,31 @@ async function loadAssignmentProgressCounts(assignment) {
         activeHelpMode = 'teacher';
         studentId = requesterUid;
         inspectingStudentId = requesterUid;
+        currentSubmissionStatus = 'submitted';
         currentSlideIndex = Number(activeHelpRequestData.slideIndex || 0);
+        // Open the same full workspace used by the teacher's normal "View Work" action.
+        // Teacher annotations save directly to the requester's real slide document.
+        window.currentInspectedStudentRecord = { studentUid: requesterUid, id: requesterUid, status: currentSubmissionStatus };
+        stopStudentPreviewListeners();
         teacherDashboard.classList.add('hidden');
         studentJoinScreen.classList.add('hidden');
         studentHistoryScreen.classList.add('hidden');
         workspaceScreen.classList.remove('hidden');
+        document.getElementById('exitWorkspaceBtn').classList.remove('hidden');
+        document.getElementById('workspaceTitle').textContent = 'Helping student';
+        document.getElementById('workspaceSubtext').textContent = "Teacher annotations live-sync to the student's canvas";
+        document.getElementById('teacherReviewActions').classList.add('hidden');
+        updateSubmitAssignmentButton();
         watchActiveHelpSession(requestId);
-        document.getElementById('workspaceSubtext').textContent = 'Helping a student • Use the locked rose-colour pen, then Submit Help';
         updatePeerHelpControls();
         setupSlideWorkspace();
-        showToast('Help session opened. Your annotation colour is locked.', 'success');
+        // Reapply normal teacher annotation defaults after workspace setup.
+        currentColor = '#dc2626';
+        const picker = document.getElementById('colorPicker');
+        if (picker) picker.value = currentColor;
+        setTool('pen');
+        updatePeerHelpControls();
+        showToast('Student work opened with the full annotation toolbar.', 'success');
       } catch (err) {
         console.error('Could not open teacher Peer Help session:', err);
         showToast('Could not open help request: ' + err.message, 'error');
@@ -3005,9 +3022,17 @@ async function loadAssignmentProgressCounts(assignment) {
       clearTimeout(saveTimeout);
       const dataUrl = exportCanvasJpeg();
       const now = firebase.firestore.FieldValue.serverTimestamp();
-      await db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(activeHelpRequestId)
-        .collection('slides').doc(`slide_${currentSlideIndex}`)
-        .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
+      if (activeHelpMode === 'teacher' && inspectingStudentId) {
+        // Match the normal teacher "View Work" persistence path.
+        await db.collection('assignments').doc(currentAssignmentId)
+          .collection('students').doc(inspectingStudentId)
+          .collection('slides').doc(`slide_${currentSlideIndex}`)
+          .set({ canvasData: dataUrl, updatedAt: now, teacherAnnotatedAt: now, teacherAnnotatedBy: signedInUser?.uid || null }, { merge: true });
+      } else {
+        await db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(activeHelpRequestId)
+          .collection('slides').doc(`slide_${currentSlideIndex}`)
+          .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
+      }
       if (activeHelpMode === 'helper') {
         await peerHelpRequestRef(activeHelpRequestId).update({ lastActivityAt: now, updatedAt: now });
       }
