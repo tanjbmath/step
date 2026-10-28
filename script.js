@@ -2755,12 +2755,10 @@ async function loadAssignmentProgressCounts(assignment) {
                   updateSlideNavigationUI();
                   if (!activeHelpRequestId) {
                     loadCurrentSlideData();
-                    // The live snapshot is authoritative; this explicit one-shot read
-                    // also makes completion refresh deterministic if a listener was stale.
-                    const refreshedSlide = await db.collection('assignments').doc(currentAssignmentId)
-                      .collection('students').doc(signedInUser.uid)
-                      .collection('slides').doc(`slide_${slideIndex}`).get();
-                    if (refreshedSlide.exists && refreshedSlide.data().canvasData && !isDrawing) {
+                    // Reuse the help-slide data already fetched above, avoiding an extra
+                    // Firestore read while immediately painting the saved result.
+                    const refreshedCanvasData = slideDoc.data().canvasData;
+                    if (refreshedCanvasData && !isDrawing) {
                       const refreshedImage = new Image();
                       refreshedImage.onload = () => {
                         if (!isDrawing && !activeHelpRequestId && currentSlideIndex === slideIndex) {
@@ -2768,7 +2766,7 @@ async function loadAssignmentProgressCounts(assignment) {
                           ctx.drawImage(refreshedImage, 0, 0, mainCanvas.width, mainCanvas.height);
                         }
                       };
-                      refreshedImage.src = refreshedSlide.data().canvasData;
+                      refreshedImage.src = refreshedCanvasData;
                     }
                   }
                 } catch (err) {
