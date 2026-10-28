@@ -289,10 +289,10 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'in-progress'
           && (
             !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data)
-            || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+            || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
           )
           && request.resource.data.keys().hasOnly([
-            'requestId', 'question', 'status', 'slideIndex', 'workKey', 'helperUid',
+            'requestId', 'question', 'requestMode', 'status', 'slideIndex', 'workKey', 'helperUid',
             'createdAt', 'updatedAt'
           ])
           && request.resource.data.requestId == requestId
