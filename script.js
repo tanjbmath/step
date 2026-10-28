@@ -2672,6 +2672,18 @@ async function loadAssignmentProgressCounts(assignment) {
                   await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
                     .collection('slides').doc(`slide_${slideIndex}`)
                     .set({ canvasData: slideDoc.data().canvasData, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), peerHelpRequestId: requestDoc.id }, { merge: true });
+                  // Auto-complete after the requester canvas is safely updated; no Thanks action is needed.
+                  await db.runTransaction(async transaction => {
+                    const latestRequest = await transaction.get(requestsRef.doc(requestDoc.id));
+                    const lockRef = peerHelpLockRef(data.workKey);
+                    const latestLock = await transaction.get(lockRef);
+                    if (latestRequest.exists && latestRequest.data().status === 'submitted') {
+                      const completedAt = firebase.firestore.FieldValue.serverTimestamp();
+                      transaction.update(requestsRef.doc(requestDoc.id), { status: 'acknowledged', completedAt, updatedAt: completedAt });
+                      if (latestLock.exists && latestLock.data().status === 'submitted') transaction.update(lockRef, { status: 'acknowledged', updatedAt: completedAt });
+                    }
+                  });
+                  item.status = 'acknowledged';
                   currentSlideIndex = slideIndex;
                   updateSlideNavigationUI();
                   if (!activeHelpRequestId) loadCurrentSlideData();
