@@ -1642,7 +1642,7 @@ async function loadAssignmentProgressCounts(assignment) {
       } else {
         teacherDashboard.classList.remove('hidden');
       }
-      if (currentUserRole === 'teacher' && currentAssignmentId) startTeacherHelpMonitor(currentAssignmentId);
+      if (currentUserRole === 'teacher' && currentAssignmentId) loadTeacherAssignmentView(currentAssignmentId);
     });
 
     // ==========================================
@@ -2488,6 +2488,11 @@ async function loadAssignmentProgressCounts(assignment) {
           if(data.status==='pending'){tx.update(ref,{status:'helping',claimedAt:now,updatedAt:now});tx.update(lockRef,{status:'helping',updatedAt:now});}
         });
         if(unsubTeacherHelpRequests){unsubTeacherHelpRequests();unsubTeacherHelpRequests=null;}teacherHelpListeningAssignmentId=null;
+        if(unsubAssignment){unsubAssignment();unsubAssignment=null;}
+        if(unsubStudents){unsubStudents();unsubStudents=null;}
+        if(unsubAssignedStudents){unsubAssignedStudents();unsubAssignedStudents=null;}
+        stopStudentPreviewListeners();
+        if(teacherStatsRefreshTimer!==null){clearTimeout(teacherStatsRefreshTimer);teacherStatsRefreshTimer=null;}
         activeHelpRequestId=requestId;activeHelpRequestData=data;activeHelpMode='teacher';studentId=data.requesterUid;studentName=data.requesterName||'Student';inspectingStudentId=data.requesterUid;currentSlideIndex=Number(data.slideIndex||0);requesterHelpLock=false;
         teacherDashboard.classList.add('hidden');studentJoinScreen.classList.add('hidden');studentHistoryScreen.classList.add('hidden');workspaceScreen.classList.remove('hidden');
         document.getElementById('workspaceSubtext').textContent='Teacher Help • Annotate with the locked rose-colour pen, then click Finish Help';updatePeerHelpControls();setupSlideWorkspace();
