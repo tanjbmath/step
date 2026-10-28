@@ -1215,9 +1215,7 @@ async function loadAssignmentProgressCounts(assignment) {
           </div><span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded font-semibold whitespace-nowrap">${currentAssignmentData?.slides?.length || 1} Slides</span></div>
           <div class="h-32 bg-white border border-slate-200 rounded flex items-center justify-center overflow-hidden relative">
             ${student.isJoined ? '<img id="thumb-' + escapeHtml(student.studentUid || student.id) + '" alt="Live student canvas preview" class="w-full h-full object-contain" />' : '<span class="text-xs text-slate-400">Not joined yet</span>'}
-            ${isPeerHelpEnabled() && student.helpRequested ? '<span class="raised-hand-badge absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"><i class="fa-solid fa-hand"></i> NEEDS HELP</span>' : ''}
           </div>
-          ${isPeerHelpEnabled() && student.helpRequested ? '<p class="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-2 whitespace-pre-wrap"><strong>Question:</strong> ' + escapeHtml(student.helpQuestion || 'Student raised a hand.') + '</p>' : ''}
           <div class="flex flex-wrap gap-2">
             ${student.isJoined ? '<button type="button" class="inspect-student-btn flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">View work</button>' : ''}
             ${student.status === 'submitted' ? '<button type="button" class="mark-completed-btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">Completed</button><button type="button" class="amendments-btn bg-amber-500 hover:bg-amber-600 text-white text-xs px-3 py-2 rounded-lg font-semibold">Amendments Needed</button>' : ''}
@@ -2614,15 +2612,21 @@ async function loadAssignmentProgressCounts(assignment) {
       }
 
       const panel = document.getElementById('peerHelpPanel');
-      if (panel) panel.classList.toggle('hidden', currentUserRole !== 'teacher' && !isPeerHelpEnabled());
-      if (currentUserRole !== 'teacher') loadRecentPeerHelpActivity();
+      if (panel) panel.classList.toggle('hidden', !currentAssignmentId || !signedInUser);
+      const queue = document.getElementById('peerHelpRequestList');
+      const refresh = document.getElementById('refreshPeerHelpBtn');
+      const hint = document.getElementById('peerHelpPanelHint');
+      const peerMode = isPeerHelpEnabled();
+      if (queue) queue.classList.toggle('hidden', currentUserRole !== 'teacher' && !peerMode);
+      if (refresh) refresh.classList.toggle('hidden', currentUserRole !== 'teacher' && !peerMode);
+      if (hint) hint.textContent = peerMode ? 'Ask for help or help a peer with this assignment.' : 'Teacher Help only. Your latest two requests appear below.';
 
       const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
       if (currentUserRole === 'teacher') {
         startTeacherHelpMonitor(currentAssignmentId);
       } else if (currentSubmissionStatus === 'completed' && isPeerHelpEnabled()) {
         // Fetch only while Peer Help is enabled; no assignment-wide student listener.
-        requestsRef.where('status', '==', 'pending').limit(10).get().then(snapshot => {
+        requestsRef.where('status', '==', 'pending').where('requestMode', '==', 'peer').limit(10).get().then(snapshot => {
           renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
         }).catch(err => console.warn('Available Peer Help fetch:', err));
       } else {
@@ -2708,7 +2712,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function renderOwnedPeerHelpRequests(items) {
-      const list = document.getElementById('peerHelpRequestList');
+      const list = document.getElementById('peerHelpActivityLog');
       hasOpenOwnedHelpRequest = items.some(item => ['pending', 'helping', 'submitted'].includes(item.status));
       updateSubmitAssignmentButton();
       if (!list) return;
@@ -2774,8 +2778,6 @@ async function loadAssignmentProgressCounts(assignment) {
           activeHelpLockKey: workKey
         }, { merge: true });
         await batch.commit();
-        await db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc('help_requested_' + requestRef.id).set({ eventType: 'help-requested', assignmentId: currentAssignmentId, requestId: requestRef.id, createdAt: now });
-        await loadRecentPeerHelpActivity();
         document.getElementById('askForHelpModal').classList.add('hidden');
         document.getElementById('askForHelpForm').reset();
         showToast('Peer Help request sent. Your identity is hidden from other students.', 'success');
@@ -2911,14 +2913,13 @@ async function loadAssignmentProgressCounts(assignment) {
             const lockDoc = await transaction.get(lockRef);
             if (!lockDoc.exists || lockDoc.data().status !== 'helping') throw new Error('The session lock is no longer active.');
             transaction.update(ref, {
-              status: 'acknowledged',
+              status: 'submitted',
               submittedAt: now,
-              completedAt: now,
               updatedAt: now,
               teacherSubmittedBy: signedInUser.uid,
               teacherSubmittedAt: now
             });
-            transaction.update(lockRef, { status: 'acknowledged', updatedAt: now });
+            transaction.update(lockRef, { status: 'submitted', updatedAt: now });
             transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`teacher_submitted_${requestId}`), {
               eventType: 'teacher-submitted-on-behalf',
               assignmentId: currentAssignmentId,
@@ -2937,7 +2938,7 @@ async function loadAssignmentProgressCounts(assignment) {
             const lockRef = peerHelpLockRef(doc.data().workKey);
             const lockDoc = await transaction.get(lockRef);
             if (!lockDoc.exists || lockDoc.data().status !== 'helping') throw new Error('The session lock is no longer active.');
-            transaction.update(ref, { status: 'acknowledged', submittedAt: now, completedAt: now, updatedAt: now });
+            transaction.update(ref, { status: 'submitted', submittedAt: now, updatedAt: now });
             transaction.update(lockRef, { status: 'submitted', updatedAt: now });
             transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`help_submitted_${requestId}`), {
               eventType: 'help-submitted',
@@ -2947,11 +2948,6 @@ async function loadAssignmentProgressCounts(assignment) {
               createdAt: now
             });
           });
-        }
-        const ownerDoc = await peerHelpOwnerRef(requestId).get();
-        const requesterUid = ownerDoc.exists ? ownerDoc.data().requesterUid : null;
-        if (requesterUid) {
-          await db.collection('users').doc(requesterUid).collection('peerHelpEvents').doc('help_completed_' + requestId).set({ eventType: asTeacher ? 'teacher-submitted-on-behalf' : 'help-submitted', assignmentId: currentAssignmentId, requestId, createdAt: now });
         }
         if (!asTeacher) {
           if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
@@ -3055,6 +3051,8 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     document.getElementById('askForHelpBtn').addEventListener('click', () => {
+      document.getElementById('askForHelpTitle').textContent = isPeerHelpEnabled() ? 'Ask for Peer Help' : 'Ask your teacher for help';
+      document.getElementById('createPeerHelpBtn').textContent = isPeerHelpEnabled() ? 'Send Peer Help request' : 'Send to Teacher';
       document.getElementById('askForHelpModal').classList.remove('hidden');
       document.getElementById('peerHelpQuestionInput').focus();
     });
@@ -3066,29 +3064,8 @@ async function loadAssignmentProgressCounts(assignment) {
     });
     document.getElementById('submitPeerHelpBtn').addEventListener('click', () => activeHelpRequestId && submitPeerHelp(activeHelpRequestId, false));
     document.getElementById('teacherSubmitPeerHelpBtn').addEventListener('click', () => activeHelpRequestId && submitPeerHelp(activeHelpRequestId, true));
-    document.getElementById('refreshPeerHelpBtn').addEventListener('click', () => { startPeerHelpListeners(); loadRecentPeerHelpActivity(); });
+    document.getElementById('refreshPeerHelpBtn').addEventListener('click', startPeerHelpListeners);
     document.getElementById('teacherRefreshPeerHelpBtn').addEventListener('click', () => startTeacherHelpMonitor(currentAssignmentId));
-
-    async function loadRecentPeerHelpActivity() {
-      const target = document.getElementById('peerHelpActivityLog');
-      if (!target || !signedInUser || !db || !currentAssignmentId) return;
-      target.innerHTML = '<p class="text-xs text-slate-400">Loading…</p>';
-      try {
-        const snapshot = await db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents')
-          .orderBy('createdAt', 'desc').limit(2).get();
-        target.innerHTML = '';
-        snapshot.docs.forEach(doc => {
-          const event = doc.data() || {};
-          if (event.assignmentId && event.assignmentId !== currentAssignmentId) return;
-          const line = document.createElement('p');
-          line.className = 'text-xs text-slate-600';
-          const labels = { 'help-submitted': 'Help completed', 'teacher-submitted-on-behalf': 'Teacher completed a help session', 'help-requested': 'Help request sent' };
-          line.textContent = labels[event.eventType] || 'Help activity updated';
-          target.appendChild(line);
-        });
-        if (!target.childElementCount) target.innerHTML = '<p class="text-xs text-slate-400">No recent activity for this assignment.</p>';
-      } catch (err) { console.warn('Recent Peer Help activity:', err); target.innerHTML = '<p class="text-xs text-slate-400">Activity unavailable.</p>'; }
-    }
 
     // ==========================================
     // UTILITY & NOTIFICATION FUNCTIONS
