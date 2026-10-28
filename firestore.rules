@@ -340,8 +340,8 @@ service cloud.firestore {
             isHelpRequester(assignmentId, requestId)
             && resource.data.status == 'submitted'
             && request.resource.data.status == 'acknowledged'
-            && getAfter(peerHelpEventPath(request.auth.uid, 'help_thanked_' + requestId)).data.requestId == requestId
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'thankedAt', 'updatedAt'])
+            && request.resource.data.completedAt == request.time
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'completedAt', 'updatedAt'])
           ) || (
             ownsAssignment(assignmentId)
             && resource.data.status == 'helping'
