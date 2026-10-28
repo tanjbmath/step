@@ -2725,13 +2725,16 @@ async function loadAssignmentProgressCounts(assignment) {
       hasOpenOwnedHelpRequest = items.some(item => ['pending', 'helping'].includes(item.status));
       updateSubmitAssignmentButton();
       if (!list) return;
-      const existing = Array.from(list.querySelectorAll('[data-owned-request]'));
-      existing.forEach(node => node.remove());
+      list.innerHTML = '';
       const latestItems = items.slice().sort((a, b) => {
         const at = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
         const bt = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
         return bt - at;
       }).slice(0, 2);
+      if (!latestItems.length) {
+        list.innerHTML = '<p class="text-xs text-slate-400">No recent requests.</p>';
+        return;
+      }
       latestItems.forEach(item => {
         const card = document.createElement('div');
         card.className = 'peer-help-request-card';
