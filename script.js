@@ -234,8 +234,8 @@
     let studentName = null;
     let inspectingStudentId = null;
 
-    // Teacher-controlled help feature. Missing flag keeps legacy assignments enabled.
-    function isPeerHelpEnabled() { return currentAssignmentData?.peerHelpEnabled !== false; }
+    // Teacher-controlled help feature. Peer Help is opt-in; missing flags default to disabled.
+    function isPeerHelpEnabled() { return currentAssignmentData?.peerHelpEnabled === true; }
 
     // Peer Help state. Requester identity is stored only in the private owner mapping.
     let activeHelpRequestId = null;
@@ -713,7 +713,7 @@
         status: 'published',
         classLabel,
         assignedStudentCount: 0,
-        peerHelpEnabled: true
+        peerHelpEnabled: false
       };
 
       let docId = "assign_" + code;
@@ -2484,7 +2484,8 @@ async function loadAssignmentProgressCounts(assignment) {
         penTool.classList.remove('bg-white', 'text-slate-700');
       }
       if (mainCanvas) mainCanvas.style.pointerEvents = requesterHelpLock ? 'none' : 'auto';
-      if (ask) ask.innerHTML = isPeerHelpEnabled() ? '<i class="fa-solid fa-handshake-angle mr-1"></i> Peer Help' : '<i class="fa-solid fa-chalkboard-teacher mr-1"></i> Teacher Help';
+      const askButton = document.getElementById('askForHelpBtn');
+      if (askButton) askButton.innerHTML = isPeerHelpEnabled() ? '<i class="fa-solid fa-handshake-angle mr-1"></i> Peer Help' : '<i class="fa-solid fa-chalkboard-teacher mr-1"></i> Teacher Help';
       updateSubmitAssignmentButton();
     }
 
