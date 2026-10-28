@@ -2641,6 +2641,15 @@ async function loadAssignmentProgressCounts(assignment) {
                   currentSlideIndex = slideIndex;
                   updateSlideNavigationUI();
                   if (!activeHelpRequestId) loadCurrentSlideData();
+
+                  // Once the submitted canvas is safely copied, stop watching this request.
+                  // Keep its submitted state locally so the requester can still acknowledge it.
+                  const stopSubmittedListener = ownedHelpRequestListeners.get(requestDoc.id);
+                  if (stopSubmittedListener) {
+                    stopSubmittedListener();
+                    ownedHelpRequestListeners.delete(requestDoc.id);
+                  }
+                  finishedOwnedHelpRequestListeners.add(requestDoc.id);
                 } catch (err) {
                   copiedHelpResults.delete(requestDoc.id);
                   console.error('Could not apply peer annotations to requester canvas:', err);
@@ -2963,6 +2972,13 @@ async function loadAssignmentProgressCounts(assignment) {
             createdAt: now
           });
         });
+        // The request listener is intentionally stopped after canvas copy, so update the
+        // local card state when acknowledgement succeeds instead of waiting for a snapshot.
+        const acknowledgedItem = ownedHelpRequestState.get(requestId);
+        if (acknowledgedItem) {
+          ownedHelpRequestState.set(requestId, { ...acknowledgedItem, status: 'acknowledged' });
+          renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
+        }
         showToast('Thanks recorded. This help event is now eligible for achievement tracking.', 'success');
       } catch (err) {
         console.error('Could not acknowledge Peer Help:', err);
