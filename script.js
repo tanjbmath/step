@@ -2501,38 +2501,44 @@ async function loadAssignmentProgressCounts(assignment) {
       if (panel) panel.classList.toggle('hidden', !currentAssignmentId || !signedInUser);
       const helperMode = activeHelpMode === 'helper';
       const teacherMode = activeHelpMode === 'teacher';
+      // A helper may also have an outstanding request of their own. That request's
+      // lock must never disable the canvas while they are actively helping someone else.
+      const requesterIsLocked = requesterHelpLock && !helperMode && !teacherMode;
       const lockBadge = document.getElementById('peerHelpStatusBadge');
       const submitHelper = document.getElementById('submitPeerHelpBtn');
       const submitTeacher = document.getElementById('teacherSubmitPeerHelpBtn');
       if (submitHelper) submitHelper.classList.toggle('hidden', !helperMode);
       if (submitTeacher) submitTeacher.classList.toggle('hidden', !teacherMode);
       if (lockBadge) {
-        const visible = requesterHelpLock || helperMode || teacherMode;
+        const visible = requesterIsLocked || helperMode || teacherMode;
         lockBadge.classList.toggle('hidden', !visible);
-        lockBadge.textContent = requesterHelpLock ? 'Someone is helping' : (helperMode ? 'Helping a peer' : (teacherMode ? 'Reviewing help session' : ''));
-        lockBadge.classList.toggle('peer-help-pulse', requesterHelpLock || helperMode);
+        lockBadge.textContent = requesterIsLocked ? 'Someone is helping' : (helperMode ? 'Helping a peer' : (teacherMode ? 'Reviewing help session' : ''));
+        lockBadge.classList.toggle('peer-help-pulse', requesterIsLocked || helperMode);
       }
       const colorPicker = document.getElementById('colorPicker');
       const eraser = document.getElementById('toolEraser');
       const textTool = document.getElementById('toolText');
       const penTool = document.getElementById('toolPen');
-      const lockTools = helperMode || teacherMode || requesterHelpLock;
       ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn', 'prevSlideBtn', 'nextSlideBtn'].forEach(id => {
         const control = document.getElementById(id);
-        if (control) control.disabled = requesterHelpLock || ((helperMode || teacherMode) && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
+        if (control) {
+          control.disabled = requesterIsLocked || ((helperMode || teacherMode) && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
+        }
       });
+      // Helpers and teachers can draw with the fixed rose-colour pen; only the
+      // requester is locked while another person is actively annotating their work.
       if (colorPicker) {
-        colorPicker.disabled = lockTools;
-        if (lockTools) colorPicker.value = PEER_HELP_COLOUR;
+        colorPicker.disabled = requesterIsLocked || helperMode || teacherMode;
+        if (helperMode || teacherMode) colorPicker.value = PEER_HELP_COLOUR;
       }
-      if (eraser) eraser.disabled = lockTools;
-      if (textTool) textTool.disabled = lockTools;
-      if (penTool && lockTools) {
+      if (eraser) eraser.disabled = requesterIsLocked || helperMode || teacherMode;
+      if (textTool) textTool.disabled = requesterIsLocked || helperMode || teacherMode;
+      if (penTool && (requesterIsLocked || helperMode || teacherMode)) {
         activeTool = 'pen';
         penTool.classList.add('bg-indigo-600', 'text-white');
         penTool.classList.remove('bg-white', 'text-slate-700');
       }
-      if (mainCanvas) mainCanvas.style.pointerEvents = requesterHelpLock ? 'none' : 'auto';
+      if (mainCanvas) mainCanvas.style.pointerEvents = requesterIsLocked ? 'none' : 'auto';
       const askButton = document.getElementById('askForHelpBtn');
       if (askButton) askButton.innerHTML = isPeerHelpEnabled() ? '<i class="fa-solid fa-handshake-angle mr-1"></i> Peer Help' : '<i class="fa-solid fa-chalkboard-teacher mr-1"></i> Teacher Help';
       updateSubmitAssignmentButton();
