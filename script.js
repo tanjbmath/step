@@ -1147,7 +1147,7 @@ async function loadAssignmentProgressCounts(assignment) {
             <span class="inline-block mt-1 text-xs rounded-full px-2 py-1" style="${statusBadgeStyle}">${labels[String(student.status || '').trim().toLowerCase()] || 'In Progress'}</span>
           </div><span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded font-semibold whitespace-nowrap">${currentAssignmentData?.slides?.length || 1} Slides</span></div>
           <div class="h-32 bg-white border border-slate-200 rounded flex items-center justify-center overflow-hidden relative">
-            ${student.isJoined ? '<span class="text-xs text-slate-400 text-center px-3">Live preview paused to reduce reads. Select “View work” to open the canvas.</span>' : '<span class="text-xs text-slate-400">Not joined yet</span>'}
+            ${student.isJoined ? '<img id="thumb-' + escapeHtml(student.studentUid || student.id) + '" alt="Live student canvas preview" class="w-full h-full object-contain" />' : '<span class="text-xs text-slate-400">Not joined yet</span>'}
             ${student.helpRequested ? '<span class="raised-hand-badge absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"><i class="fa-solid fa-hand"></i> NEEDS HELP</span>' : ''}
           </div>
           ${student.helpRequested ? '<p class="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-2 whitespace-pre-wrap"><strong>Question:</strong> ' + escapeHtml(student.helpQuestion || 'Student raised a hand.') + '</p>' : ''}
@@ -1172,13 +1172,44 @@ async function loadAssignmentProgressCounts(assignment) {
         });
         grid.appendChild(card);
       });
-      // Avoid one realtime slide listener per student: use View work to load an individual canvas.
+      syncStudentPreviewListeners(studentsList);
     }
 
-    // Live roster cards deliberately do not subscribe to each student's slide document.
-    // This prevents N persistent listeners and repeated reads while students draw.
+    // Keep one live preview listener per joined student while the teacher roster is visible.
+    // Reuse existing listeners across roster rerenders and unsubscribe removed students.
     function syncStudentPreviewListeners(studentsList) {
-      stopStudentPreviewListeners();
+      const activeKeys = new Set();
+      if (!currentAssignmentId || !db || teacherDashboard.classList.contains('hidden')) {
+        stopStudentPreviewListeners();
+        return;
+      }
+      studentsList.forEach(student => {
+        if (!student.isJoined) return;
+        const studentUid = student.studentUid || student.id;
+        if (!studentUid) return;
+        const key = `${currentAssignmentId}:${studentUid}`;
+        activeKeys.add(key);
+        if (studentPreviewUnsubscribers.has(key)) return;
+        const unsubscribe = db.collection('assignments').doc(currentAssignmentId)
+          .collection('students').doc(studentUid).collection('slides').doc('slide_0')
+          .onSnapshot(slideDoc => {
+            const img = document.getElementById(`thumb-${studentUid}`);
+            if (!img) return;
+            const canvasData = slideDoc.exists ? slideDoc.data().canvasData : null;
+            if (canvasData) {
+              if (img.getAttribute('src') !== canvasData) img.src = canvasData;
+            } else {
+              img.removeAttribute('src');
+            }
+          }, err => console.warn('Student preview listener:', err));
+        studentPreviewUnsubscribers.set(key, unsubscribe);
+      });
+      studentPreviewUnsubscribers.forEach((unsubscribe, key) => {
+        if (!activeKeys.has(key)) {
+          unsubscribe();
+          studentPreviewUnsubscribers.delete(key);
+        }
+      });
     }
 
     function stopStudentPreviewListeners() {
@@ -1221,6 +1252,8 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function openWorkspaceForInspection(stId, stName, status = 'submitted', studentRecord = null) {
+      // Live roster previews are unnecessary while inspecting one student's full canvas.
+      stopStudentPreviewListeners();
       inspectingStudentId = stId;
       currentSubmissionStatus = status || 'submitted';
       window.currentInspectedStudentRecord = studentRecord || { studentUid: stId, id: stId, status: currentSubmissionStatus };
