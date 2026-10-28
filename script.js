@@ -25,6 +25,7 @@
     let teacherAssignmentsUnsubscribe = null;
     // Keep exactly one live preview listener per joined student in the active assignment.
     const studentPreviewUnsubscribers = new Map();
+    const studentPreviewData = new Map();
     let teacherStatsRefreshTimer = null;
     // Short-lived shared cache lets teacher stats and assignment cards reuse roster reads.
     const teacherRosterReadCache = new Map();
@@ -1189,17 +1190,24 @@ async function loadAssignmentProgressCounts(assignment) {
         if (!studentUid) return;
         const key = `${currentAssignmentId}:${studentUid}`;
         activeKeys.add(key);
+        const img = document.getElementById(`thumb-${studentUid}`);
+        // Roster rerenders replace image elements; reuse the last preview without
+        // creating another listener or waiting for the next canvas save.
+        const cachedCanvasData = studentPreviewData.get(key);
+        if (img && cachedCanvasData && img.getAttribute('src') !== cachedCanvasData) img.src = cachedCanvasData;
         if (studentPreviewUnsubscribers.has(key)) return;
         const unsubscribe = db.collection('assignments').doc(currentAssignmentId)
           .collection('students').doc(studentUid).collection('slides').doc('slide_0')
           .onSnapshot(slideDoc => {
-            const img = document.getElementById(`thumb-${studentUid}`);
-            if (!img) return;
             const canvasData = slideDoc.exists ? slideDoc.data().canvasData : null;
+            if (canvasData) studentPreviewData.set(key, canvasData);
+            else studentPreviewData.delete(key);
+            const previewImg = document.getElementById(`thumb-${studentUid}`);
+            if (!previewImg) return;
             if (canvasData) {
-              if (img.getAttribute('src') !== canvasData) img.src = canvasData;
+              if (previewImg.getAttribute('src') !== canvasData) previewImg.src = canvasData;
             } else {
-              img.removeAttribute('src');
+              previewImg.removeAttribute('src');
             }
           }, err => console.warn('Student preview listener:', err));
         studentPreviewUnsubscribers.set(key, unsubscribe);
@@ -1208,6 +1216,7 @@ async function loadAssignmentProgressCounts(assignment) {
         if (!activeKeys.has(key)) {
           unsubscribe();
           studentPreviewUnsubscribers.delete(key);
+          studentPreviewData.delete(key);
         }
       });
     }
