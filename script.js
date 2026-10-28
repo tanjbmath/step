@@ -149,19 +149,25 @@
           }
           renderStudentHistory();
 
-          // A shared assignment link opens the student join form automatically after sign-in.
+          // Shared links reopen an existing member's assignment directly; new students see the join form.
           const requestedJoinCode = new URLSearchParams(window.location.search).get('join');
           if (requestedJoinCode && !window.__stepJoinLinkHandled) {
             window.__stepJoinLinkHandled = true;
-            document.getElementById('joinCodeInput').value = requestedJoinCode.trim().toUpperCase();
-            const nameInput = document.getElementById('studentNameInput');
-            if (!nameInput.value.trim()) {
-              nameInput.value = user.displayName || '';
+            const normalizedCode = requestedJoinCode.trim().toUpperCase();
+            let reopenedExistingAssignment = false;
+            try {
+              reopenedExistingAssignment = await openJoinedAssignmentFromLink(normalizedCode);
+            } catch (err) {
+              console.warn('Could not check existing assignment membership:', err);
             }
-            await switchRole('student', { showJoinForm: true });
-            // Keep the shared code visible after all role/navigation updates.
-            document.getElementById('joinCodeInput').value = requestedJoinCode.trim().toUpperCase();
-            nameInput.focus();
+            if (!reopenedExistingAssignment) {
+              document.getElementById('joinCodeInput').value = normalizedCode;
+              const nameInput = document.getElementById('studentNameInput');
+              if (!nameInput.value.trim()) nameInput.value = user.displayName || '';
+              await switchRole('student', { showJoinForm: true });
+              document.getElementById('joinCodeInput').value = normalizedCode;
+              nameInput.focus();
+            }
           }
         } else {
           signedOut.classList.remove('hidden');
@@ -1250,6 +1256,55 @@ async function loadAssignmentProgressCounts(assignment) {
     // Pre-fill the session code immediately when a student opens a shared link.
     const initialJoinCode = new URLSearchParams(window.location.search).get('join');
     if (initialJoinCode) document.getElementById('joinCodeInput').value = initialJoinCode.trim().toUpperCase();
+
+    // Reopen an assignment from its shared link if this account has already joined it.
+    // This avoids showing the join-code/name form and avoids rewriting membership/submission data.
+    async function openJoinedAssignmentFromLink(inputCode) {
+      if (!signedInUser || !db || !inputCode) return false;
+      const lookupDoc = await db.collection('assignmentLookups').doc(inputCode).get();
+      if (!lookupDoc.exists) return false;
+      const lookup = lookupDoc.data() || {};
+      const assignmentId = lookup.assignmentId;
+      if (!assignmentId) return false;
+
+      const assignmentRef = db.collection('assignments').doc(assignmentId);
+      const membershipRef = assignmentRef.collection('students').doc(signedInUser.uid);
+      const membershipDoc = await membershipRef.get();
+      if (!membershipDoc.exists) return false;
+
+      const assignmentDoc = await assignmentRef.get();
+      if (!assignmentDoc.exists) {
+        showToast('This assignment is no longer available.', 'error');
+        return true;
+      }
+      const membership = membershipDoc.data() || {};
+      const assignment = assignmentDoc.data() || {};
+      const assignedKey = studentKeyForEmail(signedInUser.email);
+      const assignedRef = assignmentRef.collection('assignedStudents').doc(assignedKey);
+      const assignedDoc = await assignedRef.get();
+      const assignedStatus = assignedDoc.exists ? (assignedDoc.data().status || 'assignment-started') : (membership.status || 'in-progress');
+
+      await switchRole('student');
+      studentId = signedInUser.uid;
+      studentName = membership.name || studentProfileName || signedInUser.displayName || (signedInUser.email || 'Student').split('@')[0];
+      currentAssignmentId = assignmentId;
+      currentAssignmentData = assignment;
+      currentSessionCode = inputCode;
+      currentAssignedStudentKey = assignedDoc.exists ? assignedKey : null;
+      currentSubmissionStatus = assignedStatus === 'assignment-started' ? 'in-progress' : assignedStatus;
+      updateSubmitAssignmentButton();
+
+      studentJoinScreen.classList.add('hidden');
+      studentHistoryScreen.classList.add('hidden');
+      teacherDashboard.classList.add('hidden');
+      workspaceScreen.classList.remove('hidden');
+      document.getElementById('exitWorkspaceBtn').classList.add('hidden');
+      document.getElementById('workspaceTitle').textContent = assignment.title || 'Interactive Assignment';
+      document.getElementById('workspaceSubtext').textContent = `Student: ${studentName} (Stylus & Touch Active)`;
+      currentSlideIndex = 0;
+      setupSlideWorkspace();
+      return true;
+    }
 
     // ==========================================
     // STUDENT JOIN & MATCHING
