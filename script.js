@@ -1690,9 +1690,22 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
-    document.getElementById('prevSlideBtn').addEventListener('click', async () => {\n      if (currentSlideIndex > 0) {\n        await flushCanvasSaveToFirestore();\n        currentSlideIndex--;\n        setupSlideWorkspace();\n      }\n    });
+    document.getElementById('prevSlideBtn').addEventListener('click', async () => {
+      if (currentSlideIndex > 0) {
+        await flushCanvasSaveToFirestore();
+        currentSlideIndex--;
+        setupSlideWorkspace();
+      }
+    });
 
-    document.getElementById('nextSlideBtn').addEventListener('click', async () => {\n      const totalSlides = currentAssignmentData?.slides?.length || 1;\n      if (currentSlideIndex < totalSlides - 1) {\n        await flushCanvasSaveToFirestore();\n        currentSlideIndex++;\n        setupSlideWorkspace();\n      }\n    });
+    document.getElementById('nextSlideBtn').addEventListener('click', async () => {
+      const totalSlides = currentAssignmentData?.slides?.length || 1;
+      if (currentSlideIndex < totalSlides - 1) {
+        await flushCanvasSaveToFirestore();
+        currentSlideIndex++;
+        setupSlideWorkspace();
+      }
+    });
 
     function resizeCanvas() {
       const rect = canvasWrapper.getBoundingClientRect();
