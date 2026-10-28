@@ -242,7 +242,7 @@
     const ownedHelpRequestState = new Map();
     let unsubTeacherHelpRequests = null;
     let teacherHelpListeningAssignmentId = null;
-    const PEER_HELP_COLOUR = '#e11d48';
+    const TEACHER_HELP_COLOUR = '#e11d48';
 
     let currentSlideIndex = 0;
     let activeTool = 'pen';
@@ -1616,6 +1616,14 @@ async function loadAssignmentProgressCounts(assignment) {
       if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
       teacherHelpListeningAssignmentId = null;
       if (activeHelpMode === 'teacher') {
+        // Preserve the latest draft locally if the teacher leaves or refreshes before finishing.
+        if (activeHelpRequestId) {
+          try {
+            localStorage.setItem('step_teacher_help_draft_' + currentAssignmentId + '_' + activeHelpRequestId + '_' + currentSlideIndex, exportCanvasJpeg());
+          } catch (err) { console.warn('Could not preserve local teacher-help draft:', err); }
+        }
+        if (saveTimeout !== null) { clearTimeout(saveTimeout); saveTimeout = null; }
+        canvasSaveDirty = false;
         activeHelpRequestId = null;
         activeHelpRequestData = null;
         activeHelpMode = null;
@@ -2368,7 +2376,7 @@ async function loadAssignmentProgressCounts(assignment) {
     // ==========================================
     // PEER HELP WORKFLOW
     // ==========================================
-    function peerHelpRequestRef(requestId) {
+    function teacherHelpRequestRef(requestId) {
       return db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(requestId);
     }
 
@@ -2468,7 +2476,7 @@ async function loadAssignmentProgressCounts(assignment) {
     async function claimPeerHelpRequestAsTeacher(requestId){
       if(!signedInUser||currentUserRole!=='teacher'||!currentAssignmentId||activeHelpRequestId)return;
       try{
-        const ref=peerHelpRequestRef(requestId),now=firebase.firestore.FieldValue.serverTimestamp();let data=null;
+        const ref=teacherHelpRequestRef(requestId),now=firebase.firestore.FieldValue.serverTimestamp();let data=null;
         await db.runTransaction(async tx=>{
           const doc=await tx.get(ref);
           if(!doc.exists||!['pending','helping'].includes(doc.data().status)||!doc.data().requesterUid)throw new Error('This request is unavailable or belongs to the older Peer Help workflow.');
@@ -2499,6 +2507,7 @@ async function loadAssignmentProgressCounts(assignment) {
         batch.set(slideRef,{canvasData,updatedAt:now,teacherAnnotatedAt:now,teacherAnnotatedBy:signedInUser.uid,teacherHelpRequestId:requestId},{merge:true});
         batch.update(requestRef,{status:'submitted',submittedAt:now,updatedAt:now});batch.update(lockRef,{status:'submitted',updatedAt:now});batch.update(studentRef,{activeHelpLockKey:firebase.firestore.FieldValue.delete()});await batch.commit();
         localStorage.removeItem('step_teacher_help_draft_'+currentAssignmentId+'_'+requestId+'_'+currentSlideIndex);
+        canvasSaveDirty=false;
         if(unsubSlideWork){unsubSlideWork();unsubSlideWork=null;}activeHelpRequestId=null;activeHelpRequestData=null;activeHelpMode=null;isDrawing=false;
         updatePeerHelpControls();loadCurrentSlideData();document.getElementById('workspaceSubtext').textContent='Assignment workspace • Teacher annotations saved';
         showToast('Teacher annotations saved to the student’s work.','success');document.getElementById('exitWorkspaceBtn').click();
