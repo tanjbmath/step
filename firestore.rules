@@ -299,7 +299,7 @@ service cloud.firestore {
           && request.resource.data.requestMode in ['teacher', 'peer']
           && (request.resource.data.requestMode != 'peer' || get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled != false)
           && request.resource.data.question is string
-          && request.resource.data.question.size() > 0
+          // Question text is optional.
           && request.resource.data.question.size() <= 500
           && request.resource.data.status == 'pending'
           && request.resource.data.helperUid == null
