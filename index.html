@@ -160,6 +160,10 @@
             <h3 id="currentAssignmentTitle" class="text-2xl font-bold">---</h3>
             <p id="currentAssignmentDesc" class="text-indigo-200 text-sm mt-1">---</p>
           </div>
+          <div class="flex flex-col items-start gap-1">
+            <button id="togglePeerHelpBtn" type="button" aria-pressed="true" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">Disable Peer Help</button>
+            <span id="peerHelpToggleState" class="text-xs text-indigo-100">Peer Help enabled — students and teacher can help</span>
+          </div>
           <button id="deleteTeacherAssignmentBtn" type="button" class="bg-rose-600 hover:bg-rose-500 text-white px-3 py-2 rounded-lg text-sm font-semibold">Delete assignment and all student work</button>
           <div class="bg-indigo-800/80 backdrop-blur border border-indigo-700 px-6 py-3 rounded-lg text-center flex flex-col items-center gap-2">
             <div class="text-xs text-indigo-300 uppercase tracking-wider font-semibold">Session Code</div>
@@ -192,7 +196,11 @@
           </div>
 
           <!-- Students Live Grid -->
-          <div id="studentsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 [align-items:stretch] [grid-auto-rows:auto]">
+          <section class="bg-white p-5 rounded-xl shadow-sm border border-sky-200 mb-6">
+          <div class="flex items-center justify-between gap-3 mb-3"><div><h4 class="font-bold text-slate-800"><i class="fa-solid fa-handshake-angle text-sky-600 mr-1"></i> Help Requests</h4><p class="text-xs text-slate-500">Teacher can handle both Teacher Help and Peer Help requests.</p></div><button id="teacherRefreshPeerHelpBtn" type="button" class="px-3 py-1.5 rounded-lg border text-xs font-semibold">Refresh</button></div>
+          <div id="teacherPeerHelpList" class="space-y-2"><p class="text-sm text-slate-500">No help requests loaded.</p></div>
+        </section>
+        <div id="studentsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 [align-items:stretch] [grid-auto-rows:auto]">
             <div id="emptyStudentState" class="col-span-full text-center py-12 text-slate-400">
               <i class="fa-solid fa-user-clock text-4xl mb-3"></i>
               <p>Waiting for students to join with code <span class="font-bold text-indigo-600" id="shareCodeText">------</span>...</p>
@@ -257,8 +265,9 @@
             <p id="workspaceSubtext" class="text-xs text-slate-500">Stylus & Touch enabled • Auto-saves live</p>
           </div>
           <button id="submitAssignmentBtn" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">Submit assignment</button>
-          <button id="askForHelpBtn" type="button" class="hidden bg-sky-600 hover:bg-sky-700 text-white px-3 py-2 rounded-lg text-sm font-semibold"><i class="fa-solid fa-hand mr-1"></i> Need Help</button>
-          <button id="clearHelpRequestBtn" type="button" class="hidden bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">Clear Raised Hand</button>
+          <button id="askForHelpBtn" type="button" class="hidden bg-sky-600 hover:bg-sky-700 text-white px-3 py-2 rounded-lg text-sm font-semibold"><i class="fa-solid fa-handshake-angle mr-1"></i> Peer Help</button>
+          <button id="submitPeerHelpBtn" type="button" class="hidden bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">Submit Help</button>
+          <button id="teacherSubmitPeerHelpBtn" type="button" class="hidden bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">Submit on behalf</button>
           <span id="peerHelpStatusBadge" class="hidden rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-3 py-1.5 text-xs font-bold"></span>
           <div id="teacherReviewActions" class="hidden flex flex-wrap gap-2">
             <button id="teacherMarkCompletedBtn" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">Mark Completed</button>
@@ -270,6 +279,13 @@
 
 
       </div>
+
+      <!-- Peer Help / Teacher Help request window -->
+      <section id="peerHelpPanel" class="hidden w-full bg-white rounded-xl border border-sky-200 shadow-sm p-4 mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-3"><div><h3 class="font-bold text-slate-800"><i class="fa-solid fa-handshake-angle text-sky-600 mr-1"></i> Help Requests</h3><p id="peerHelpPanelHint" class="text-xs text-slate-500 mt-1">Ask for teacher help or help a peer with this assignment.</p><span id="peerHelpCountBadge" class="hidden mt-2 inline-flex items-center rounded-full bg-rose-100 text-rose-800 border border-rose-200 px-2.5 py-1 text-xs font-bold peer-help-pulse">0 new requests</span></div><button id="refreshPeerHelpBtn" type="button" class="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50"><i class="fa-solid fa-rotate mr-1"></i> Refresh</button></div>
+        <div id="peerHelpRequestList" class="space-y-2"><p class="text-sm text-slate-500">No help requests to show.</p></div>
+        <div class="mt-4 border-t border-slate-200 pt-3"><h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">Your latest 2 help requests</h4><div id="peerHelpActivityLog" class="space-y-1"><p class="text-xs text-slate-400">No recent requests.</p></div></div>
+      </section>
 
       <!-- Canvas Box Area -->
       <div id="canvasPanel" class="bg-white rounded-xl shadow-md border border-slate-200 p-4 flex flex-col items-center">
