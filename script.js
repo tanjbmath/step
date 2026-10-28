@@ -1347,6 +1347,11 @@ async function loadAssignmentProgressCounts(assignment) {
 
       currentSlideIndex = 0;
       setupSlideWorkspace();
+      // Reassert teacher feedback defaults after workspace setup refreshes controls.
+      currentColor = '#dc2626';
+      if (annotationColorPicker) annotationColorPicker.value = currentColor;
+      setTool('pen');
+      updatePeerHelpControls();
     }
 
     // Pre-fill the session code immediately when a student opens a shared link.
@@ -2503,7 +2508,7 @@ async function loadAssignmentProgressCounts(assignment) {
       const teacherMode = activeHelpMode === 'teacher';
       // A helper may also have an outstanding request of their own. That request's
       // lock must never disable the canvas while they are actively helping someone else.
-      const requesterIsLocked = requesterHelpLock && !helperMode && !teacherMode;
+      const requesterIsLocked = requesterHelpLock && currentUserRole === 'student' && !inspectingStudentId && !helperMode && !teacherMode;
       const lockBadge = document.getElementById('peerHelpStatusBadge');
       const submitHelper = document.getElementById('submitPeerHelpBtn');
       const submitTeacher = document.getElementById('teacherSubmitPeerHelpBtn');
