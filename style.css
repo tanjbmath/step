@@ -178,3 +178,17 @@
 }
 .peer-help-request-card { border: 1px solid #dbeafe; border-radius: .75rem; padding: .75rem; background: #f8fbff; }
 .peer-help-request-card[data-status="helping"] { border-color: #fbbf24; background: #fffbeb; }
+
+
+/* Raised-hand help notification on the teacher's live student-work cards. */
+.raised-hand-badge {
+  color: #be123c;
+  background: #fff1f2;
+  border: 1px solid #fda4af;
+  box-shadow: 0 0 0 2px rgba(244, 63, 94, .12), 0 0 14px rgba(244, 63, 94, .35);
+  animation: raised-hand-glow 1.8s ease-in-out infinite;
+}
+@keyframes raised-hand-glow {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(244, 63, 94, .12), 0 0 10px rgba(244, 63, 94, .22); }
+  50% { box-shadow: 0 0 0 4px rgba(244, 63, 94, .2), 0 0 18px rgba(244, 63, 94, .5); }
+}
