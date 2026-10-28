@@ -240,17 +240,8 @@
     let requesterHelpLock = false;
     let hasOpenOwnedHelpRequest = false;
     const ownedHelpRequestState = new Map();
-    let unsubHelpRequests = null;
-    let unsubOwnedHelpRequests = null;
-    const ownedHelpRequestListeners = new Map();
-    const finishedOwnedHelpRequestListeners = new Set();
     let unsubTeacherHelpRequests = null;
     let teacherHelpListeningAssignmentId = null;
-    const teacherRequesterLabelCache = new Map();
-    let unsubActiveHelpSession = null;
-    let peerHelpListeningAssignmentId = null;
-    const copiedHelpResults = new Set();
-    const copyingHelpResults = new Set();
     const PEER_HELP_COLOUR = '#e11d48';
 
     let currentSlideIndex = 0;
@@ -1622,33 +1613,16 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     document.getElementById('exitWorkspaceBtn').addEventListener('click', () => {
-      // Leaving an active help session does not cancel it. The teacher can submit the
-      // last saved annotations or release the lock from the monitor.
-      if (false) {
-        if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
-        activeHelpRequestId = null;
-        activeHelpRequestData = null;
-        activeHelpMode = null;
-        updatePeerHelpControls();
-      }
-      if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
-      if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
       if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
       teacherHelpListeningAssignmentId = null;
-      if (unsubActiveHelpSession) { unsubActiveHelpSession(); unsubActiveHelpSession = null; }
       if (activeHelpMode === 'teacher') {
         activeHelpRequestId = null;
         activeHelpRequestData = null;
         activeHelpMode = null;
         updatePeerHelpControls();
       }
-      ownedHelpRequestListeners.forEach(unsub => unsub());
-      ownedHelpRequestListeners.clear();
-      finishedOwnedHelpRequestListeners.clear();
       ownedHelpRequestState.clear();
-      teacherRequesterLabelCache.clear();
       requesterHelpLock = false;
-      peerHelpListeningAssignmentId = null;
       workspaceScreen.classList.add('hidden');
       if (inspectingStudentId) {
         teacherDashboard.classList.remove('hidden');
@@ -2398,10 +2372,6 @@ async function loadAssignmentProgressCounts(assignment) {
       return db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(requestId);
     }
 
-    function peerHelpOwnerRef(requestId) {
-      return db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners').doc(requestId);
-    }
-
     function peerHelpLockRef(workKey) {
       return db.collection('assignments').doc(currentAssignmentId).collection('helpLocks').doc(workKey);
     }
@@ -2495,8 +2465,6 @@ async function loadAssignmentProgressCounts(assignment) {
       }catch(err){console.error('Could not create teacher-help request:',err);showToast('Could not send help request: '+err.message,'error');}finally{button.disabled=false;}
     }
 
-    async function claimPeerHelpRequest(requestId){showToast('Student-to-student help is disabled. Only your teacher can handle requests.','info');}
-
     async function claimPeerHelpRequestAsTeacher(requestId){
       if(!signedInUser||currentUserRole!=='teacher'||!currentAssignmentId||activeHelpRequestId)return;
       try{
@@ -2537,8 +2505,6 @@ async function loadAssignmentProgressCounts(assignment) {
       }catch(err){console.error('Could not finish teacher help:',err);showToast('Could not save teacher annotations: '+err.message,'error');}finally{if(button)button.disabled=false;}
     }
 
-    async function acknowledgePeerHelp(requestId){return;}
-
 
 
     async function expirePeerHelpRequest(requestId){
@@ -2550,8 +2516,6 @@ async function loadAssignmentProgressCounts(assignment) {
         showToast('Teacher-help request closed.','success');
       }catch(err){showToast('Could not close request: '+err.message,'error');}
     }
-
-    function watchActiveHelpSession(requestId){return;}
 
     function startTeacherHelpMonitor(assignmentId){
       if(!db||!signedInUser||currentUserRole!=='teacher'||!assignmentId)return;
@@ -2571,7 +2535,7 @@ async function loadAssignmentProgressCounts(assignment) {
       event.preventDefault();
       createPeerHelpRequest(document.getElementById('peerHelpQuestionInput').value);
     });
-    document.getElementById('submitPeerHelpBtn').addEventListener('click', () => activeHelpRequestId && submitPeerHelp(activeHelpRequestId, false));
+    document.getElementById('submitPeerHelpBtn').addEventListener('click', () => {});
     document.getElementById('teacherSubmitPeerHelpBtn').addEventListener('click', () => activeHelpRequestId && submitPeerHelp(activeHelpRequestId, true));
     document.getElementById('refreshPeerHelpBtn').addEventListener('click', startPeerHelpListeners);
     document.getElementById('teacherRefreshPeerHelpBtn').addEventListener('click', () => startTeacherHelpMonitor(currentAssignmentId));
