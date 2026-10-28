@@ -1666,7 +1666,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function updateSlideNavigationUI() {
       const totalSlides = currentAssignmentData?.slides?.length || 1;
-      document.getElementById('slideIndicator').textContent = `Slide ${currentSlideIndex + 1} of ${totalSlides}`;
+      document.getElementById('slideIndicator').textContent = `Page ${currentSlideIndex + 1} of ${totalSlides}`;
       document.getElementById('prevSlideBtn').disabled = (currentSlideIndex === 0);
       document.getElementById('nextSlideBtn').disabled = (currentSlideIndex === totalSlides - 1);
 
