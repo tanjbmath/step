@@ -1865,12 +1865,37 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function loadCurrentSlideData() {
+      if (!currentAssignmentId) return;
+      if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
+
+      // Helpers must work on the requester's submitted canvas, not their own completed work.
+      if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
+        const requestId = activeHelpRequestId;
+        unsubSlideWork = db.collection('assignments').doc(currentAssignmentId)
+          .collection('helpRequests').doc(requestId)
+          .collection('slides').doc(`slide_${currentSlideIndex}`)
+          .onSnapshot(doc => {
+            // A live Firestore echo must never repaint the canvas mid-stroke.
+            if (isDrawing || activeHelpRequestId !== requestId) return;
+            redrawBackgroundAndCanvas();
+            if (doc.exists) {
+              const slideData = doc.data() || {};
+              if (slideData.canvasData) {
+                const img = new Image();
+                img.onload = () => {
+                  if (!isDrawing && activeHelpRequestId === requestId) {
+                    ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
+                  }
+                };
+                img.src = slideData.canvasData;
+              }
+            }
+          }, err => console.warn("Help request slide listener notice:", err));
+        return;
+      }
+
       const targetStudentId = inspectingStudentId || studentId;
-      if (!currentAssignmentId || !targetStudentId) return;
-
-      if (unsubSlideWork) unsubSlideWork();
-
-
+      if (!targetStudentId) return;
       if (db) {
         unsubSlideWork = db.collection('assignments').doc(currentAssignmentId)
           .collection('students').doc(targetStudentId)
@@ -1880,8 +1905,12 @@ async function loadAssignmentProgressCounts(assignment) {
             if (isDrawing) return;
             redrawBackgroundAndCanvas();
             if (doc.exists) {
-              const slideData=doc.data();
-              if(slideData.canvasData){const img=new Image();img.onload=()=>ctx.drawImage(img,0,0,mainCanvas.width,mainCanvas.height);img.src=slideData.canvasData;}
+              const slideData = doc.data() || {};
+              if (slideData.canvasData) {
+                const img = new Image();
+                img.onload = () => ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
+                img.src = slideData.canvasData;
+              }
             }
           }, err => console.warn("Slide listener notice:", err));
       } else {
@@ -1921,7 +1950,8 @@ async function loadAssignmentProgressCounts(assignment) {
         const targetStudentId = inspectingStudentId || studentId;
         const assignmentId = currentAssignmentId;
         const slideIndex = currentSlideIndex;
-        if (!assignmentId || !targetStudentId) return;
+        if (!assignmentId) return;
+        if (!targetStudentId && !(activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode))) return;
 
         const exportCanvas = document.createElement('canvas');
         exportCanvas.width = mainCanvas.width;
@@ -1933,6 +1963,18 @@ async function loadAssignmentProgressCounts(assignment) {
         const dataUrl = exportCanvas.toDataURL('image/jpeg', 0.92);
         const now = firebase.firestore.FieldValue.serverTimestamp();
 
+        if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)) {
+          await db.collection('assignments').doc(assignmentId)
+            .collection('helpRequests').doc(activeHelpRequestId)
+            .collection('slides').doc(`slide_${slideIndex}`)
+            .set({ canvasData: dataUrl, updatedAt: now }, { merge: true });
+          if (activeHelpMode === 'helper') {
+            await db.collection('assignments').doc(assignmentId)
+              .collection('helpRequests').doc(activeHelpRequestId)
+              .update({ lastActivityAt: now, updatedAt: now });
+          }
+          return;
+        }
         if (db && inspectingStudentId && currentUserRole === 'teacher') {
           await db.collection('assignments').doc(assignmentId)
             .collection('students').doc(targetStudentId)
