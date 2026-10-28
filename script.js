@@ -236,7 +236,7 @@
     // Peer Help state. Requester identity is stored only in the private owner mapping.
     let activeHelpRequestId = null;
     let activeHelpRequestData = null;
-    let activeHelpMode = null; // 'helper' or 'teacher'
+    let activeHelpMode = null; // 'teacher' only
     let requesterHelpLock = false;
     let hasOpenOwnedHelpRequest = false;
     const ownedHelpRequestState = new Map();
@@ -2523,42 +2523,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     async function acknowledgePeerHelp(requestId){return;}
 
-    async function acknowledgePeerHelp(requestId) {
-      if (!signedInUser || !currentAssignmentId) return;
-      try {
-        const ref = peerHelpRequestRef(requestId);
-        const now = firebase.firestore.FieldValue.serverTimestamp();
-        await db.runTransaction(async transaction => {
-          const requestDoc = await transaction.get(ref);
-          if (!requestDoc.exists || requestDoc.data().status !== 'submitted') throw new Error('This help has already been acknowledged or is not ready.');
-          const helperUid = requestDoc.data().helperUid;
-          const lockRef = peerHelpLockRef(requestDoc.data().workKey);
-          const lockDoc = await transaction.get(lockRef);
-          if (!lockDoc.exists || lockDoc.data().status !== 'submitted') throw new Error('The help session lock is not ready to close.');
-          transaction.update(ref, { status: 'acknowledged', thankedAt: now, updatedAt: now });
-          transaction.update(lockRef, { status: 'acknowledged', updatedAt: now });
-          transaction.set(db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').doc(`help_thanked_${requestId}`), {
-            eventType: 'help-thanked',
-            assignmentId: currentAssignmentId,
-            requestId,
-            requesterUid: signedInUser.uid,
-            helperUid,
-            createdAt: now
-          });
-        });
-        // The request listener is intentionally stopped after canvas copy, so update the
-        // local card state when acknowledgement succeeds instead of waiting for a snapshot.
-        const acknowledgedItem = ownedHelpRequestState.get(requestId);
-        if (acknowledgedItem) {
-          ownedHelpRequestState.set(requestId, { ...acknowledgedItem, status: 'acknowledged' });
-          renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
-        }
-        showToast('Thanks recorded. This help event is now eligible for achievement tracking.', 'success');
-      } catch (err) {
-        console.error('Could not acknowledge Peer Help:', err);
-        showToast('Could not record thanks: ' + err.message, 'error');
-      }
-    }
+
 
     async function expirePeerHelpRequest(requestId){
       if(!signedInUser||currentUserRole!=='teacher')return;if(!confirm('Close this teacher-help request? The student will be able to continue working.'))return;
