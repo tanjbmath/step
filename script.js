@@ -234,6 +234,9 @@
     let studentName = null;
     let inspectingStudentId = null;
 
+    // Teacher-controlled help feature. Missing flag keeps legacy assignments enabled.
+    function isPeerHelpEnabled() { return currentAssignmentData?.peerHelpEnabled !== false; }
+
     // Peer Help state. Requester identity is stored only in the private owner mapping.
 
     let currentSlideIndex = 0;
@@ -691,7 +694,8 @@
         createdAt: new Date().toISOString(),
         status: 'published',
         classLabel,
-        assignedStudentCount: 0
+        assignedStudentCount: 0,
+        peerHelpEnabled: true
       };
 
       let docId = "assign_" + code;
@@ -773,6 +777,7 @@
       document.getElementById('currentAssignmentDesc').textContent = currentAssignmentData.description || 'No instructions provided.';
       document.getElementById('currentSessionCode').textContent = currentAssignmentData.sessionCode || '------';
       updateAssignmentStudentLink();
+      updatePeerHelpToggleUI();
 
       if (!db) {
         currentJoinedStudents = [];
@@ -803,6 +808,8 @@
         document.getElementById('currentAssignmentDesc').textContent = currentAssignmentData.description || 'No instructions provided.';
         document.getElementById('currentSessionCode').textContent = currentAssignmentData.sessionCode || '------';
         updateAssignmentStudentLink();
+        updatePeerHelpToggleUI();
+        renderStudentGrid(mergeCurrentTeacherRoster());
       }, err => console.warn('Assignment snapshot notice:', err));
 
       // Refresh cross-assignment statistics only when roster membership or status changes.
@@ -1087,7 +1094,7 @@ async function loadAssignmentProgressCounts(assignment) {
         });
     }
 
-    function renderTeacherRoster() {
+    function mergeCurrentTeacherRoster() {
       const joinedByEmail = new Map();
       currentJoinedStudents.forEach(student => { if (student.email) joinedByEmail.set(student.email.trim().toLowerCase(), student); });
       const roster = [];
@@ -1106,8 +1113,47 @@ async function loadAssignmentProgressCounts(assignment) {
         // Preserve the persisted Firestore status so submitted students retain review actions.
         if (!email || !assignedEmails.has(email)) roster.push({ ...student, studentUid: student.id, isJoined: true, status: student.status || 'in-progress' });
       });
-      renderStudentGrid(roster);
+      return roster;
     }
+
+    function renderTeacherRoster() {
+      renderStudentGrid(mergeCurrentTeacherRoster());
+    }
+
+    function updatePeerHelpToggleUI() {
+      const button = document.getElementById('togglePeerHelpBtn');
+      const state = document.getElementById('peerHelpToggleState');
+      if (!button || !state) return;
+      const active = isPeerHelpEnabled();
+      button.setAttribute('aria-pressed', String(active));
+      button.textContent = active ? 'Turn Help Off' : 'Turn Help On';
+      button.className = active
+        ? 'bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-semibold'
+        : 'bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-lg text-sm font-semibold';
+      state.textContent = active ? 'Enabled — students can raise a hand' : 'Disabled — help requests and notifications are inactive';
+      state.className = active ? 'text-xs text-emerald-100' : 'text-xs text-indigo-200';
+    }
+
+    document.getElementById('togglePeerHelpBtn').addEventListener('click', async () => {
+      if (!signedInUser || !db || currentUserRole !== 'teacher' || !currentAssignmentId
+          || currentAssignmentData?.teacherId !== signedInUser.uid) {
+        showToast('Open an assignment you own to change its help setting.', 'error');
+        return;
+      }
+      const button = document.getElementById('togglePeerHelpBtn');
+      const nextEnabled = !isPeerHelpEnabled();
+      button.disabled = true;
+      try {
+        await db.collection('assignments').doc(currentAssignmentId).update({ peerHelpEnabled: nextEnabled });
+        currentAssignmentData = { ...currentAssignmentData, peerHelpEnabled: nextEnabled };
+        updatePeerHelpToggleUI();
+        renderStudentGrid(mergeCurrentTeacherRoster());
+        updatePeerHelpControls();
+        showToast(nextEnabled ? 'Help requests enabled for this assignment.' : 'Help requests disabled for this assignment.', 'success');
+      } catch (err) {
+        showToast('Could not change help setting: ' + err.message, 'error');
+      } finally { button.disabled = false; }
+    });
 
     function studentKeyForEmail(email) {
       return String(email || '').trim().toLowerCase().replace(/\//g, '_');
@@ -1149,9 +1195,9 @@ async function loadAssignmentProgressCounts(assignment) {
           </div><span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded font-semibold whitespace-nowrap">${currentAssignmentData?.slides?.length || 1} Slides</span></div>
           <div class="h-32 bg-white border border-slate-200 rounded flex items-center justify-center overflow-hidden relative">
             ${student.isJoined ? '<img id="thumb-' + escapeHtml(student.studentUid || student.id) + '" alt="Live student canvas preview" class="w-full h-full object-contain" />' : '<span class="text-xs text-slate-400">Not joined yet</span>'}
-            ${student.helpRequested ? '<span class="raised-hand-badge absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"><i class="fa-solid fa-hand"></i> NEEDS HELP</span>' : ''}
+            ${isPeerHelpEnabled() && student.helpRequested ? '<span class="raised-hand-badge absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"><i class="fa-solid fa-hand"></i> NEEDS HELP</span>' : ''}
           </div>
-          ${student.helpRequested ? '<p class="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-2 whitespace-pre-wrap"><strong>Question:</strong> ' + escapeHtml(student.helpQuestion || 'Student raised a hand.') + '</p>' : ''}
+          ${isPeerHelpEnabled() && student.helpRequested ? '<p class="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-2 whitespace-pre-wrap"><strong>Question:</strong> ' + escapeHtml(student.helpQuestion || 'Student raised a hand.') + '</p>' : ''}
           <div class="flex flex-wrap gap-2">
             ${student.isJoined ? '<button type="button" class="inspect-student-btn flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">View work</button>' : ''}
             ${student.status === 'submitted' ? '<button type="button" class="mark-completed-btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">Completed</button><button type="button" class="amendments-btn bg-amber-500 hover:bg-amber-600 text-white text-xs px-3 py-2 rounded-lg font-semibold">Amendments Needed</button>' : ''}
@@ -2365,7 +2411,7 @@ async function loadAssignmentProgressCounts(assignment) {
       const ask=document.getElementById('askForHelpBtn');
       const clear=document.getElementById('clearHelpRequestBtn');
       const status=document.getElementById('peerHelpStatusBadge');
-      const isStudent=currentUserRole==='student'&&Boolean(signedInUser)&&Boolean(currentAssignmentId);
+      const isStudent=currentUserRole==='student'&&Boolean(signedInUser)&&Boolean(currentAssignmentId)&&isPeerHelpEnabled();
       const requested=Boolean(window.currentStudentHelpRequested);
       if(ask){
         ask.classList.toggle('hidden',!isStudent||currentSubmissionStatus!=='in-progress');
@@ -2374,14 +2420,14 @@ async function loadAssignmentProgressCounts(assignment) {
         ask.classList.toggle('opacity-70',requested);
       }
       const record=window.currentInspectedStudentRecord;
-      const isTeacherInspecting=currentUserRole==='teacher'&&Boolean(inspectingStudentId);
+      const isTeacherInspecting=currentUserRole==='teacher'&&Boolean(inspectingStudentId)&&isPeerHelpEnabled();
       if(clear)clear.classList.toggle('hidden',!isTeacherInspecting||!record?.helpRequested);
       if(status){status.classList.toggle('hidden',!isTeacherInspecting||!record?.helpRequested);status.textContent=record?.helpRequested?'✋ Student needs help':'';}
       updateSubmitAssignmentButton();
     }
 
     async function createPeerHelpRequest(question){
-      if(!signedInUser||!currentAssignmentId||currentUserRole!=='student'||currentSubmissionStatus!=='in-progress')return;
+      if(!signedInUser||!currentAssignmentId||currentUserRole!=='student'||currentSubmissionStatus!=='in-progress'||!isPeerHelpEnabled())return;
       const button=document.getElementById('createPeerHelpBtn');
       if(button)button.disabled=true;
       try{
