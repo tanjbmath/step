@@ -214,102 +214,22 @@ service cloud.firestore {
         allow delete: if ownsAssignment(assignmentId);
       }
 
-      // Teacher Help: students may create and read only their own requests.
-      // Only the assignment owner can claim, finish, or close a request.
+      // Legacy peer/teacher help-session collections are disabled.
+      // Help notifications now live on the existing assignment student document.
       match /helpRequests/{requestId} {
-        allow get: if ownsAssignment(assignmentId)
-          || (signedIn() && resource.data.requesterUid == request.auth.uid);
-
-        allow list: if ownsAssignment(assignmentId)
-          || (signedIn() && resource.data.requesterUid == request.auth.uid);
-
-        allow create: if signedIn()
-          && isAssignmentMember(assignmentId, request.auth.uid)
-          && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'in-progress'
-          && request.resource.data.keys().hasOnly([
-            'requestId', 'requesterUid', 'requesterName', 'question', 'status',
-            'slideIndex', 'workKey', 'createdAt', 'updatedAt'
-          ])
-          && request.resource.data.requestId == requestId
-          && request.resource.data.requesterUid == request.auth.uid
-          && request.resource.data.requesterName is string
-          && request.resource.data.question is string
-          && request.resource.data.question.size() > 0
-          && request.resource.data.question.size() <= 500
-          && request.resource.data.status == 'pending'
-          && request.resource.data.slideIndex is int
-          && request.resource.data.workKey is string
-          && getAfter(helpLockPath(assignmentId, request.resource.data.workKey)).data.requestId == requestId;
-
-        allow update: if (
-            ownsAssignment(assignmentId)
-            && resource.data.status == 'pending'
-            && request.resource.data.status == 'helping'
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'claimedAt', 'updatedAt'])
-          ) || (
-            ownsAssignment(assignmentId)
-            && resource.data.status == 'helping'
-            && request.resource.data.status == 'submitted'
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'submittedAt', 'updatedAt'])
-          ) || (
-            ownsAssignment(assignmentId)
-            && resource.data.status in ['pending', 'helping']
-            && request.resource.data.status == 'expired'
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'expiredAt', 'updatedAt'])
-          );
-
-        allow delete: if ownsAssignment(assignmentId)
-          || (signedIn() && resource.data.requesterUid == request.auth.uid && resource.data.status == 'pending');
+        allow read, write: if false;
       }
 
-      // Lock documents only coordinate the student's own request and the assignment teacher.
       match /helpLocks/{workKey} {
-        allow get: if ownsAssignment(assignmentId);
-        allow list: if false;
-
-        allow create: if signedIn()
-          && isAssignmentMember(assignmentId, request.auth.uid)
-          && request.resource.data.keys().hasOnly(['requestId', 'workKey', 'status', 'createdAt', 'updatedAt'])
-          && request.resource.data.workKey == workKey
-          && request.resource.data.status == 'pending'
-          && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(request.resource.data.requestId)).data.requesterUid == request.auth.uid
-          && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(request.resource.data.requestId)).data.workKey == workKey;
-
-        allow update: if (
-            ownsAssignment(assignmentId)
-            && resource.data.status == 'pending'
-            && request.resource.data.status == 'helping'
-            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'helping'
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
-          ) || (
-            ownsAssignment(assignmentId)
-            && resource.data.status == 'helping'
-            && request.resource.data.status == 'submitted'
-            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'submitted'
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
-          ) || (
-            ownsAssignment(assignmentId)
-            && resource.data.status in ['pending', 'helping']
-            && request.resource.data.status == 'expired'
-            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'expired'
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
-          );
-
-        allow delete: if ownsAssignment(assignmentId);
+        allow read, write: if false;
       }
 
-      // Legacy requester-owner mappings are retained for existing records but cannot be written
-      // by the client or listed by students under the teacher-only workflow.
       match /helpRequestOwners/{requestId} {
-        allow get, list: if ownsAssignment(assignmentId);
-        allow create, update, delete: if false;
+        allow read, write: if false;
       }
 
-      // No peer helper may read or write the old shared help-canvas documents.
       match /helpRequests/{requestId}/slides/{slideId} {
-        allow read: if ownsAssignment(assignmentId)
-          || (signedIn() && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.requesterUid == request.auth.uid);
-        allow create, update, delete: if false;
+        allow read, write: if false;
       }
 
       match /students/{studentUid} {
