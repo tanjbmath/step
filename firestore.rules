@@ -335,9 +335,7 @@ service cloud.firestore {
         allow create, update, delete: if false;
       }
 
-      match /students/{studentUid}
-
-          match /students/{studentUid} {
+      match /students/{studentUid} {
         allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
 
         allow create: if isOwner(studentUid)
