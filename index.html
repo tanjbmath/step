@@ -160,6 +160,10 @@
             <h3 id="currentAssignmentTitle" class="text-2xl font-bold">---</h3>
             <p id="currentAssignmentDesc" class="text-indigo-200 text-sm mt-1">---</p>
           </div>
+          <div class="flex flex-col items-start gap-1">
+            <button id="togglePeerHelpBtn" type="button" aria-pressed="true" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">Turn Help Off</button>
+            <span id="peerHelpToggleState" class="text-xs text-indigo-100">Enabled — students can raise a hand</span>
+          </div>
           <button id="deleteTeacherAssignmentBtn" type="button" class="bg-rose-600 hover:bg-rose-500 text-white px-3 py-2 rounded-lg text-sm font-semibold">Delete assignment and all student work</button>
           <div class="bg-indigo-800/80 backdrop-blur border border-indigo-700 px-6 py-3 rounded-lg text-center flex flex-col items-center gap-2">
             <div class="text-xs text-indigo-300 uppercase tracking-wider font-semibold">Session Code</div>
