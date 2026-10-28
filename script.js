@@ -236,7 +236,7 @@
     // Peer Help state. Requester identity is stored only in the private owner mapping.
     let activeHelpRequestId = null;
     let activeHelpRequestData = null;
-    let activeHelpMode = null; // 'teacher' only
+    let activeHelpMode = null;
     let requesterHelpLock = false;
     let hasOpenOwnedHelpRequest = false;
     const ownedHelpRequestState = new Map();
@@ -1614,24 +1614,6 @@ async function loadAssignmentProgressCounts(assignment) {
 
     document.getElementById('exitWorkspaceBtn').addEventListener('click', () => {
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
-      if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
-      teacherHelpListeningAssignmentId = null;
-      if (activeHelpMode === 'teacher') {
-        // Preserve the latest draft locally if the teacher leaves or refreshes before finishing.
-        if (activeHelpRequestId) {
-          try {
-            localStorage.setItem('step_teacher_help_draft_' + currentAssignmentId + '_' + activeHelpRequestId + '_' + currentSlideIndex, exportCanvasJpeg());
-          } catch (err) { console.warn('Could not preserve local teacher-help draft:', err); }
-        }
-        if (saveTimeout !== null) { clearTimeout(saveTimeout); saveTimeout = null; }
-        canvasSaveDirty = false;
-        activeHelpRequestId = null;
-        activeHelpRequestData = null;
-        activeHelpMode = null;
-        updatePeerHelpControls();
-      }
-      ownedHelpRequestState.clear();
-      requesterHelpLock = false;
       workspaceScreen.classList.add('hidden');
       if (inspectingStudentId) {
         teacherDashboard.classList.remove('hidden');
@@ -1657,7 +1639,6 @@ async function loadAssignmentProgressCounts(assignment) {
       resizeCanvas();
       updatePeerHelpControls();
       loadCurrentSlideData();
-      startPeerHelpListeners();
     }
 
     function updateSlideNavigationUI() {
@@ -2267,14 +2248,6 @@ async function loadAssignmentProgressCounts(assignment) {
     }
     // Advanced Pointer Events for Stylus / Apple Pencil + Palm Rejection Toggle
     function handlePointerDown(e) {
-      if (requesterHelpLock) {
-        showToast('Your canvas is temporarily locked while a peer is helping.', 'info');
-        return;
-      }
-      if (activeHelpMode === 'teacher') {
-        activeTool = 'pen';
-        currentColor = PEER_HELP_COLOUR;
-      }
       if (!activeHelpMode && currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return;
@@ -2311,7 +2284,6 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function handlePointerMove(e) {
       if (!isDrawing) return;
-      if (activeHelpMode === 'teacher') currentColor = PEER_HELP_COLOUR;
 
       // Filter touch points in Stylus Only mode during motion
       if (isStylusOnlyMode && e.pointerType === 'touch') {
@@ -2354,11 +2326,7 @@ async function loadAssignmentProgressCounts(assignment) {
         try {
           mainCanvas.releasePointerCapture(e.pointerId);
         } catch (err) {}
-        if (activeHelpRequestId && activeHelpMode === 'teacher') {
-          saveActiveHelpCanvasNow().catch(err => console.warn('Immediate Peer Help save failed:', err));
-        } else {
-          saveCanvasToFirestore();
-        }
+        saveCanvasToFirestore();
       }
     }
 
@@ -2376,187 +2344,78 @@ async function loadAssignmentProgressCounts(assignment) {
 
 
     // ==========================================
-    // PEER HELP WORKFLOW
+    // RAISED-HAND HELP NOTIFICATION
+    // Stored on the existing assignment student record to reuse the roster listener.
     // ==========================================
-    function teacherHelpRequestRef(requestId) {
-      return db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(requestId);
-    }
-
-    function peerHelpLockRef(workKey) {
-      return db.collection('assignments').doc(currentAssignmentId).collection('helpLocks').doc(workKey);
-    }
-
-    function exportCanvasJpeg() {
-      const output = document.createElement('canvas');
-      output.width = mainCanvas.width;
-      output.height = mainCanvas.height;
-      const outputCtx = output.getContext('2d');
-      outputCtx.fillStyle = '#fff';
-      outputCtx.fillRect(0, 0, output.width, output.height);
-      outputCtx.drawImage(mainCanvas, 0, 0);
-      return output.toDataURL('image/jpeg', 0.92);
-    }
-
     function updatePeerHelpControls() {
-      const panel=document.getElementById('peerHelpPanel'); if(panel) panel.classList.toggle('hidden',!currentAssignmentId||!signedInUser||activeHelpMode==='teacher');
-      const teacherMode=activeHelpMode==='teacher', ask=document.getElementById('askForHelpBtn');
-      const submitTeacher=document.getElementById('teacherSubmitPeerHelpBtn'), submitHelper=document.getElementById('submitPeerHelpBtn');
-      const lockBadge=document.getElementById('peerHelpStatusBadge'), isStudent=currentUserRole==='student';
-      if(ask) ask.classList.toggle('hidden',!isStudent||currentSubmissionStatus!=='in-progress'||requesterHelpLock||hasOpenOwnedHelpRequest||Boolean(activeHelpRequestId));
-      if(submitTeacher) submitTeacher.classList.toggle('hidden',!teacherMode); if(submitHelper) submitHelper.classList.add('hidden');
-      if(lockBadge){lockBadge.classList.toggle('hidden',!requesterHelpLock&&!teacherMode);lockBadge.textContent=requesterHelpLock?'Waiting for teacher help':(teacherMode?'Annotating for student':'');lockBadge.classList.remove('peer-help-pulse');}
-      const lockTools=teacherMode||requesterHelpLock;
-      ['toolPen','toolEraser','toolText','colorPicker','brushSize','clearCanvasBtn','capturePhotoBtn','chooseImageBtn','undoCanvasBtn','redoCanvasBtn','prevSlideBtn','nextSlideBtn'].forEach(id=>{const c=document.getElementById(id);if(c)c.disabled=requesterHelpLock||(teacherMode&&!['toolPen','brushSize','undoCanvasBtn','redoCanvasBtn'].includes(id));});
-      const colorPicker=document.getElementById('colorPicker'),eraser=document.getElementById('toolEraser'),textTool=document.getElementById('toolText'),penTool=document.getElementById('toolPen');
-      if(colorPicker){colorPicker.disabled=lockTools;if(teacherMode)colorPicker.value=PEER_HELP_COLOUR;} if(eraser)eraser.disabled=lockTools;if(textTool)textTool.disabled=lockTools;
-      if(penTool&&teacherMode){activeTool='pen';penTool.classList.add('bg-indigo-600','text-white');penTool.classList.remove('bg-white','text-slate-700');}
-      if(mainCanvas)mainCanvas.style.pointerEvents=requesterHelpLock?'none':'auto'; updateSubmitAssignmentButton();
-    }
-
-    function renderPeerHelpRequests(requests,audience='teacher'){
-      const target=document.getElementById('teacherPeerHelpList');if(!target||audience!=='teacher')return;
-      target.querySelectorAll('[data-peer-request]').forEach(n=>n.remove());const old=target.querySelector('[data-peer-help-empty]');if(old)old.remove();
-      if(!requests.length){const e=document.createElement('p');e.dataset.peerHelpEmpty='true';e.className='text-sm text-slate-500';e.textContent='No teacher-help requests waiting.';target.appendChild(e);return;}
-      requests.sort((a,b)=>({helping:0,pending:1}[a.status]??2)-({helping:0,pending:1}[b.status]??2)).forEach(item=>{
-        const card=document.createElement('div');card.className='teacher-help-request-card';card.dataset.status=item.status||'pending';card.dataset.peerRequest=item.id;
-        const q=document.createElement('p');q.className='text-sm font-semibold text-slate-800 whitespace-pre-wrap';q.textContent=item.question||'Teacher-help request';
-        const who=document.createElement('p');who.className='text-xs text-slate-600 mt-1';who.textContent='Student: '+(item.requesterName||'Student');
-        const st=document.createElement('p');st.className='text-xs text-slate-500 mt-1';st.textContent=item.status==='helping'?'Teacher session in progress':'Waiting for teacher';card.append(q,who,st);
-        const actions=document.createElement('div');actions.className='flex flex-wrap gap-2 mt-3';
-        const add=(label,cls,cb)=>{const b=document.createElement('button');b.type='button';b.className=cls;b.textContent=label;b.addEventListener('click',cb);actions.appendChild(b);};
-        if(item.status==='pending'&&item.requesterUid)add('Help this student','px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-semibold',()=>claimPeerHelpRequestAsTeacher(item.id));
-        if(item.status==='helping'&&item.requesterUid)add('Resume Help','px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-semibold',()=>claimPeerHelpRequestAsTeacher(item.id));
-        if(item.status==='pending'||item.status==='helping')add('Close request','px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold',()=>expirePeerHelpRequest(item.id));
-        card.appendChild(actions);target.appendChild(card);
-      });
-    }
-
-    function startPeerHelpListeners(){
-      if(!db||!signedInUser||!currentAssignmentId)return;
-      if(currentUserRole==='teacher'&&activeHelpMode==='teacher')return;
-      const panel=document.getElementById('peerHelpPanel');if(panel)panel.classList.remove('hidden');
-      if(currentUserRole==='teacher'){startTeacherHelpMonitor(currentAssignmentId);return;}
-      // Student requests are fetched on demand; no student-side help snapshot listeners remain.
-      db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').where('requesterUid','==',signedInUser.uid).limit(10).get()
-        .then(snap=>{
-          const items=snap.docs.map(d=>({id:d.id,...d.data(),isOwned:true}));
-          ownedHelpRequestState.clear();items.forEach(item=>ownedHelpRequestState.set(item.id,item));
-          const open=items.find(item=>['pending','helping'].includes(item.status));
-          if(open){
-            requesterHelpLock=true;
-            const requestedSlide=Number(open.slideIndex||0);
-            if(currentUserRole==='student'&&!workspaceScreen.classList.contains('hidden')&&requestedSlide!==currentSlideIndex){currentSlideIndex=requestedSlide;updateSlideNavigationUI();loadCurrentSlideData();}
-          }
-          renderOwnedPeerHelpRequests(items);
-        }).catch(err=>console.warn('Could not load your teacher-help requests:',err));
-    }
-
-    function renderOwnedPeerHelpRequests(items){
-      const list=document.getElementById('peerHelpRequestList');hasOpenOwnedHelpRequest=items.some(i=>['pending','helping'].includes(i.status));requesterHelpLock=items.some(i=>['pending','helping'].includes(i.status));updateSubmitAssignmentButton();if(!list)return;
-      list.querySelectorAll('[data-owned-request]').forEach(n=>n.remove());const old=list.querySelector('[data-peer-help-empty]');if(old)old.remove();
-      if(!items.length){const e=document.createElement('p');e.dataset.peerHelpEmpty='true';e.className='text-sm text-slate-500';e.textContent='No teacher-help requests yet.';list.appendChild(e);}
-      items.forEach(item=>{const card=document.createElement('div');card.className='teacher-help-request-card';card.dataset.ownedRequest=item.id;card.dataset.status=item.status||'pending';
-        const q=document.createElement('p');q.className='text-sm font-semibold text-slate-800 whitespace-pre-wrap';q.textContent=item.question||'Your teacher-help request';
-        const st=document.createElement('p');st.className='text-xs text-slate-500 mt-1';st.textContent=item.status==='helping'?'Your teacher is working on this request. Your canvas is temporarily locked.':item.status==='submitted'?'Teacher annotations are ready and saved to your work.':item.status==='expired'?'This request was closed. You can continue working.':'Waiting for your teacher.';
-        card.append(q,st);list.appendChild(card);});updatePeerHelpControls();
+      const ask=document.getElementById('askForHelpBtn');
+      const clear=document.getElementById('clearHelpRequestBtn');
+      const status=document.getElementById('peerHelpStatusBadge');
+      const isStudent=currentUserRole==='student'&&Boolean(signedInUser)&&Boolean(currentAssignmentId);
+      const requested=Boolean(window.currentStudentHelpRequested);
+      if(ask){
+        ask.classList.toggle('hidden',!isStudent||currentSubmissionStatus!=='in-progress');
+        ask.disabled=requested;
+        ask.innerHTML=requested?'<i class="fa-solid fa-hand mr-1"></i> Hand Raised':'<i class="fa-solid fa-hand mr-1"></i> Need Help';
+        ask.classList.toggle('opacity-70',requested);
+      }
+      const record=window.currentInspectedStudentRecord;
+      const isTeacherInspecting=currentUserRole==='teacher'&&Boolean(inspectingStudentId);
+      if(clear)clear.classList.toggle('hidden',!isTeacherInspecting||!record?.helpRequested);
+      if(status){status.classList.toggle('hidden',!isTeacherInspecting||!record?.helpRequested);status.textContent=record?.helpRequested?'✋ Student needs help':'';}
+      updateSubmitAssignmentButton();
     }
 
     async function createPeerHelpRequest(question){
-      if(!signedInUser||!currentAssignmentId||currentSubmissionStatus!=='in-progress'||requesterHelpLock||hasOpenOwnedHelpRequest){showToast('You can request teacher help while actively working on an assignment.','info');return;}
-      const button=document.getElementById('createPeerHelpBtn');button.disabled=true;
+      if(!signedInUser||!currentAssignmentId||currentUserRole!=='student'||currentSubmissionStatus!=='in-progress')return;
+      const button=document.getElementById('createPeerHelpBtn');
+      if(button)button.disabled=true;
       try{
-        await flushCanvasSaveToFirestore();const assignmentRef=db.collection('assignments').doc(currentAssignmentId),requestRef=assignmentRef.collection('helpRequests').doc();
-        const workKey='wk_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10),now=firebase.firestore.FieldValue.serverTimestamp();
-        const item={requestId:requestRef.id,requesterUid:signedInUser.uid,requesterName:studentName||studentProfileName||signedInUser.displayName||'Student',question:question.trim(),status:'pending',slideIndex:currentSlideIndex,workKey,createdAt:now,updatedAt:now};
-        const batch=db.batch();batch.set(requestRef,item);batch.set(peerHelpLockRef(workKey),{requestId:requestRef.id,workKey,status:'pending',createdAt:now,updatedAt:now});
-        batch.set(assignmentRef.collection('students').doc(signedInUser.uid),{activeHelpLockKey:workKey},{merge:true});await batch.commit();
-        document.getElementById('askForHelpModal').classList.add('hidden');document.getElementById('askForHelpForm').reset();
-        ownedHelpRequestState.set(requestRef.id,{...item,id:requestRef.id});requesterHelpLock=true;renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
-        showToast('Teacher-help request sent. Only your teacher can view and handle it.','success');
-      }catch(err){console.error('Could not create teacher-help request:',err);showToast('Could not send help request: '+err.message,'error');}finally{button.disabled=false;}
+        await flushCanvasSaveToFirestore();
+        await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid).set({
+          helpRequested:true,
+          helpQuestion:String(question||'').trim().slice(0,500),
+          helpRequestedAt:firebase.firestore.FieldValue.serverTimestamp()
+        },{merge:true});
+        window.currentStudentHelpRequested=true;
+        document.getElementById('askForHelpModal').classList.add('hidden');
+        document.getElementById('askForHelpForm').reset();
+        updatePeerHelpControls();
+        showToast('Your teacher has been notified. Keep working while you wait.','success');
+      }catch(err){
+        console.error('Could not raise help request:',err);
+        showToast('Could not notify your teacher: '+err.message,'error');
+      }finally{if(button)button.disabled=false;}
     }
 
-    async function claimPeerHelpRequestAsTeacher(requestId){
-      if(!signedInUser||currentUserRole!=='teacher'||!currentAssignmentId||activeHelpRequestId)return;
-      try{
-        const ref=teacherHelpRequestRef(requestId),now=firebase.firestore.FieldValue.serverTimestamp();let data=null;
-        await db.runTransaction(async tx=>{
-          const doc=await tx.get(ref);
-          if(!doc.exists||!['pending','helping'].includes(doc.data().status)||!doc.data().requesterUid)throw new Error('This request is unavailable or belongs to the older Peer Help workflow.');
-          data=doc.data();const lockRef=peerHelpLockRef(data.workKey),lock=await tx.get(lockRef);
-          if(!lock.exists||!['pending','helping'].includes(lock.data().status))throw new Error('This request is no longer available.');
-          if(data.status==='pending'){tx.update(ref,{status:'helping',claimedAt:now,updatedAt:now});tx.update(lockRef,{status:'helping',updatedAt:now});}
-        });
-        if(unsubTeacherHelpRequests){unsubTeacherHelpRequests();unsubTeacherHelpRequests=null;}teacherHelpListeningAssignmentId=null;
-        if(unsubAssignment){unsubAssignment();unsubAssignment=null;}
-        if(unsubStudents){unsubStudents();unsubStudents=null;}
-        if(unsubAssignedStudents){unsubAssignedStudents();unsubAssignedStudents=null;}
-        stopStudentPreviewListeners();
-        if(teacherStatsRefreshTimer!==null){clearTimeout(teacherStatsRefreshTimer);teacherStatsRefreshTimer=null;}
-        activeHelpRequestId=requestId;activeHelpRequestData=data;activeHelpMode='teacher';studentId=data.requesterUid;studentName=data.requesterName||'Student';inspectingStudentId=data.requesterUid;currentSlideIndex=Number(data.slideIndex||0);requesterHelpLock=false;
-        teacherDashboard.classList.add('hidden');studentJoinScreen.classList.add('hidden');studentHistoryScreen.classList.add('hidden');workspaceScreen.classList.remove('hidden');
-        document.getElementById('workspaceSubtext').textContent='Teacher Help • Annotate with the locked rose-colour pen, then click Finish Help';updatePeerHelpControls();setupSlideWorkspace();
-        showToast(data.status==='helping'?'Teacher-help draft reopened. Your local annotations have been restored when available.':'Teacher-help session opened. Annotations are saved only when you click Finish Help.','success');
-      }catch(err){console.error('Could not open teacher-help session:',err);showToast('Could not open help request: '+err.message,'error');}
-    }
-
-    async function saveActiveHelpCanvasNow(){
-      if(activeHelpMode!=='teacher'||!activeHelpRequestId)return;
-      localStorage.setItem('step_teacher_help_draft_'+currentAssignmentId+'_'+activeHelpRequestId+'_'+currentSlideIndex,exportCanvasJpeg());
-    }
-
-    async function submitPeerHelp(requestId,asTeacher=false){
-      if(!asTeacher||activeHelpMode!=='teacher'||activeHelpRequestId!==requestId||!activeHelpRequestData){showToast('Only the teacher handling this request can finish it.','error');return;}
-      const button=document.getElementById('teacherSubmitPeerHelpBtn');if(button)button.disabled=true;
-      try{
-        if(saveTimeout!==null){clearTimeout(saveTimeout);saveTimeout=null;}
-        const canvasData=exportCanvasJpeg(),assignmentRef=db.collection('assignments').doc(currentAssignmentId),requestRef=assignmentRef.collection('helpRequests').doc(requestId);
-        const lockRef=peerHelpLockRef(activeHelpRequestData.workKey),studentRef=assignmentRef.collection('students').doc(activeHelpRequestData.requesterUid),slideRef=studentRef.collection('slides').doc('slide_'+currentSlideIndex);
-        const now=firebase.firestore.FieldValue.serverTimestamp(),batch=db.batch();
-        batch.set(slideRef,{canvasData,updatedAt:now,teacherAnnotatedAt:now,teacherAnnotatedBy:signedInUser.uid,teacherHelpRequestId:requestId},{merge:true});
-        batch.update(requestRef,{status:'submitted',submittedAt:now,updatedAt:now});batch.update(lockRef,{status:'submitted',updatedAt:now});batch.update(studentRef,{activeHelpLockKey:firebase.firestore.FieldValue.delete()});await batch.commit();
-        localStorage.removeItem('step_teacher_help_draft_'+currentAssignmentId+'_'+requestId+'_'+currentSlideIndex);
-        canvasSaveDirty=false;
-        if(unsubSlideWork){unsubSlideWork();unsubSlideWork=null;}activeHelpRequestId=null;activeHelpRequestData=null;activeHelpMode=null;isDrawing=false;
-        updatePeerHelpControls();document.getElementById('workspaceSubtext').textContent='Assignment workspace • Teacher annotations saved';
-        showToast('Teacher annotations saved to the student’s work.','success');document.getElementById('exitWorkspaceBtn').click();
-      }catch(err){console.error('Could not finish teacher help:',err);showToast('Could not save teacher annotations: '+err.message,'error');}finally{if(button)button.disabled=false;}
-    }
-
-
-
-    async function expirePeerHelpRequest(requestId){
-      if(!signedInUser||currentUserRole!=='teacher')return;if(!confirm('Close this teacher-help request? The student will be able to continue working.'))return;
-      try{const ref=peerHelpRequestRef(requestId);await db.runTransaction(async tx=>{const doc=await tx.get(ref);if(!doc.exists||!['pending','helping'].includes(doc.data().status))throw new Error('This request is no longer active.');
-        const data=doc.data(),lockRef=peerHelpLockRef(data.workKey),lock=await tx.get(lockRef),now=firebase.firestore.FieldValue.serverTimestamp();
-        tx.update(ref,{status:'expired',expiredAt:now,updatedAt:now});if(lock.exists)tx.update(lockRef,{status:'expired',updatedAt:now});
-        if(data.requesterUid)tx.update(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(data.requesterUid),{activeHelpLockKey:firebase.firestore.FieldValue.delete()});});
-        showToast('Teacher-help request closed.','success');
-      }catch(err){showToast('Could not close request: '+err.message,'error');}
-    }
-
-    function startTeacherHelpMonitor(assignmentId){
-      if(!db||!signedInUser||currentUserRole!=='teacher'||!assignmentId)return;
-      if(unsubTeacherHelpRequests&&teacherHelpListeningAssignmentId===assignmentId)return;
-      if(unsubTeacherHelpRequests){unsubTeacherHelpRequests();unsubTeacherHelpRequests=null;}teacherHelpListeningAssignmentId=assignmentId;
-      unsubTeacherHelpRequests=db.collection('assignments').doc(assignmentId).collection('helpRequests').where('status','in',['pending','helping']).limit(25)
-        .onSnapshot(snap=>renderPeerHelpRequests(snap.docs.map(d=>({id:d.id,...d.data()})),'teacher'),err=>{console.warn('Teacher Help monitor:',err);const t=document.getElementById('teacherPeerHelpList');if(t)t.innerHTML='<p class="text-sm text-rose-600">Could not load teacher-help requests. Check Firestore rules.</p>';});
-    }
-
-    document.getElementById('askForHelpBtn').addEventListener('click', () => {
+    document.getElementById('askForHelpBtn').addEventListener('click',()=>{
+      if(window.currentStudentHelpRequested){showToast('Your teacher has already been notified.','info');return;}
       document.getElementById('askForHelpModal').classList.remove('hidden');
       document.getElementById('peerHelpQuestionInput').focus();
     });
-    document.getElementById('closeAskForHelpBtn').addEventListener('click', () => document.getElementById('askForHelpModal').classList.add('hidden'));
-    document.getElementById('cancelAskForHelpBtn').addEventListener('click', () => document.getElementById('askForHelpModal').classList.add('hidden'));
-    document.getElementById('askForHelpForm').addEventListener('submit', event => {
+    document.getElementById('closeAskForHelpBtn').addEventListener('click',()=>document.getElementById('askForHelpModal').classList.add('hidden'));
+    document.getElementById('cancelAskForHelpBtn').addEventListener('click',()=>document.getElementById('askForHelpModal').classList.add('hidden'));
+    document.getElementById('askForHelpForm').addEventListener('submit',event=>{
       event.preventDefault();
       createPeerHelpRequest(document.getElementById('peerHelpQuestionInput').value);
     });
-    document.getElementById('submitPeerHelpBtn').addEventListener('click', () => {});
-    document.getElementById('teacherSubmitPeerHelpBtn').addEventListener('click', () => activeHelpRequestId && submitPeerHelp(activeHelpRequestId, true));
-    document.getElementById('refreshPeerHelpBtn').addEventListener('click', startPeerHelpListeners);
-    document.getElementById('teacherRefreshPeerHelpBtn').addEventListener('click', () => startTeacherHelpMonitor(currentAssignmentId));
+    document.getElementById('clearHelpRequestBtn').addEventListener('click',async()=>{
+      const record=window.currentInspectedStudentRecord;
+      const studentUid=record?.studentUid||record?.id||inspectingStudentId;
+      if(!currentAssignmentId||!studentUid||currentUserRole!=='teacher')return;
+      const button=document.getElementById('clearHelpRequestBtn');button.disabled=true;
+      try{
+        await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(studentUid).set({
+          helpRequested:false,
+          helpQuestion:firebase.firestore.FieldValue.delete(),
+          helpHandledAt:firebase.firestore.FieldValue.serverTimestamp()
+        },{merge:true});
+        window.currentInspectedStudentRecord={...record,helpRequested:false,helpQuestion:''};
+        updatePeerHelpControls();
+        showToast('Raised hand cleared.','success');
+      }catch(err){showToast('Could not clear raised hand: '+err.message,'error');}
+      finally{button.disabled=false;}
+    });
 
     // ==========================================
     // UTILITY & NOTIFICATION FUNCTIONS
