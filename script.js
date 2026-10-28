@@ -243,6 +243,7 @@
     let unsubHelpRequests = null;
     let unsubOwnedHelpRequests = null;
     const ownedHelpRequestListeners = new Map();
+    const finishedOwnedHelpRequestListeners = new Set();
     let unsubTeacherHelpRequests = null;
     const teacherRequesterLabelCache = new Map();
     let unsubActiveHelpSession = null;
@@ -2545,6 +2546,7 @@ async function loadAssignmentProgressCounts(assignment) {
         if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
         ownedHelpRequestListeners.forEach(unsub => unsub());
         ownedHelpRequestListeners.clear();
+        finishedOwnedHelpRequestListeners.clear();
         ownedHelpRequestState.clear();
         teacherRequesterLabelCache.clear();
         requesterHelpLock = false;
@@ -2581,7 +2583,7 @@ async function loadAssignmentProgressCounts(assignment) {
           }
         });
         snapshot.docs.forEach(ownerDoc => {
-          if (ownedHelpRequestListeners.has(ownerDoc.id)) return;
+          if (ownedHelpRequestListeners.has(ownerDoc.id) || finishedOwnedHelpRequestListeners.has(ownerDoc.id)) return;
           const unsub = requestsRef.doc(ownerDoc.id).onSnapshot(async requestDoc => {
             if (!requestDoc.exists) return;
             const data = requestDoc.data();
@@ -2630,6 +2632,7 @@ async function loadAssignmentProgressCounts(assignment) {
               if (stopListening) {
                 stopListening();
                 ownedHelpRequestListeners.delete(requestDoc.id);
+                finishedOwnedHelpRequestListeners.add(requestDoc.id);
               }
             }
             ownedHelpRequestState.set(item.id, item);
