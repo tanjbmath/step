@@ -2433,6 +2433,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function startPeerHelpListeners(){
       if(!db||!signedInUser||!currentAssignmentId)return;
+      if(currentUserRole==='teacher'&&activeHelpMode==='teacher')return;
       const panel=document.getElementById('peerHelpPanel');if(panel)panel.classList.remove('hidden');
       if(currentUserRole==='teacher'){startTeacherHelpMonitor(currentAssignmentId);return;}
       // Student requests are fetched on demand; no student-side help snapshot listeners remain.
