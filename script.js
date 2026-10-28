@@ -2622,8 +2622,7 @@ async function loadAssignmentProgressCounts(assignment) {
             status: 'helping',
             helperUid: signedInUser.uid,
             claimedAt: now,
-            updatedAt: now,
-            teacherHelper: true
+            updatedAt: now
           });
           transaction.update(lockRef, {
             status: 'helping',
