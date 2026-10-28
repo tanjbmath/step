@@ -26,6 +26,29 @@
     // Keep exactly one live preview listener per joined student in the active assignment.
     const studentPreviewUnsubscribers = new Map();
     let teacherStatsRefreshTimer = null;
+    // Short-lived shared cache lets teacher stats and assignment cards reuse roster reads.
+    const teacherRosterReadCache = new Map();
+    const TEACHER_ROSTER_CACHE_MS = 5000;
+
+    async function getTeacherRosterSnapshot(assignmentRef, collectionName) {
+      const key = assignmentRef.id + ':' + collectionName;
+      const now = Date.now();
+      const cached = teacherRosterReadCache.get(key);
+      if (cached && cached.expiresAt > now) return cached.promise;
+
+      const promise = assignmentRef.collection(collectionName).get().catch(err => {
+        if (teacherRosterReadCache.get(key)?.promise === promise) teacherRosterReadCache.delete(key);
+        throw err;
+      });
+      teacherRosterReadCache.set(key, { promise, expiresAt: now + TEACHER_ROSTER_CACHE_MS });
+      return promise;
+    }
+
+    function invalidateTeacherRosterCache(assignmentId) {
+      for (const key of teacherRosterReadCache.keys()) {
+        if (key.startsWith(assignmentId + ':')) teacherRosterReadCache.delete(key);
+      }
+    }
     let studentAssignedRecords = [];
     let studentSubmissionRecords = [];
     let currentAssignedStudents = [];
@@ -888,11 +911,17 @@
       try {
         const assignments = await db.collection('assignments').where('teacherId', '==', signedInUser.uid).get();
         const students = new Map();
+        const studentRosterRefs = new Map();
         for (const assignment of assignments.docs) {
           const [rosterSnapshot, assignedSnapshot] = await Promise.all([
-            assignment.ref.collection('students').get(),
-            assignment.ref.collection('assignedStudents').get()
+            getTeacherRosterSnapshot(assignment.ref, 'students'),
+            getTeacherRosterSnapshot(assignment.ref, 'assignedStudents')
           ]);
+          rosterSnapshot.docs.forEach(doc => {
+            const refs = studentRosterRefs.get(doc.id) || [];
+            refs.push(doc.ref);
+            studentRosterRefs.set(doc.id, refs);
+          });
           const byIdentity = new Map();
           rosterSnapshot.docs.forEach(doc => {
             const data = doc.data();
@@ -934,13 +963,12 @@
           tr.querySelector('.save-remark-btn').addEventListener('click', async () => {
             const remark = input.value.trim();
             try {
-              const studentRefs = [];
-              for (const assignment of assignments.docs) {
-                const ref = assignment.ref.collection('students').doc(student.id);
-                const doc = await ref.get();
-                if (doc.exists) studentRefs.push(ref);
-              }
-              for (const ref of studentRefs) await ref.set({ teacherRemark: remark, teacherRemarkUpdatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+              const studentRefs = studentRosterRefs.get(student.id) || [];
+              await Promise.all(studentRefs.map(ref => ref.set({
+                teacherRemark: remark,
+                teacherRemarkUpdatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              }, { merge: true })));
+              assignments.docs.forEach(assignment => invalidateTeacherRosterCache(assignment.id));
               showToast('Remark saved.', 'success');
             } catch (err) { showToast('Could not save remark: ' + err.message, 'error'); }
           });
@@ -955,8 +983,8 @@
 async function loadAssignmentProgressCounts(assignment) {
       const assignmentRef = db.collection('assignments').doc(assignment.id);
       const [assignedSnapshot, joinedSnapshot] = await Promise.all([
-        assignmentRef.collection('assignedStudents').get(),
-        assignmentRef.collection('students').get()
+        getTeacherRosterSnapshot(assignmentRef, 'assignedStudents'),
+        getTeacherRosterSnapshot(assignmentRef, 'students')
       ]);
 
       // Merge assigned and joined records so a student is counted only once.
