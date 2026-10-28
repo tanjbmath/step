@@ -282,7 +282,7 @@ service cloud.firestore {
         allow list: if ownsAssignment(assignmentId)
           || (isCompletedPeer(assignmentId) && resource.data.status == 'pending'
               && resource.data.requestMode == 'peer'
-              && get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled != false);
+              && get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled == true);
 
         allow create: if signedIn()
           && isAssignmentMember(assignmentId, request.auth.uid)
@@ -297,7 +297,7 @@ service cloud.firestore {
           ])
           && request.resource.data.requestId == requestId
           && request.resource.data.requestMode in ['teacher', 'peer']
-          && (request.resource.data.requestMode != 'peer' || get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled != false)
+          && (request.resource.data.requestMode != 'peer' || get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled == true)
           && request.resource.data.question is string
           // Question text is optional.
           && request.resource.data.question.size() <= 500
@@ -311,7 +311,7 @@ service cloud.firestore {
         allow update: if (
             signedIn()
             && isCompletedPeer(assignmentId)
-            && get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled != false
+            && get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled == true
             && resource.data.requestMode == 'peer'
             && resource.data.status == 'pending'
             && request.resource.data.status == 'helping'
