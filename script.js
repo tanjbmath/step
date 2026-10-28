@@ -23,6 +23,9 @@
     let historyUnsubscribe = null;
     let assignedHistoryUnsubscribe = null;
     let teacherAssignmentsUnsubscribe = null;
+    // Keep exactly one live preview listener per joined student in the active assignment.
+    const studentPreviewUnsubscribers = new Map();
+    let teacherStatsRefreshTimer = null;
     let studentAssignedRecords = [];
     let studentSubmissionRecords = [];
     let currentAssignedStudents = [];
@@ -428,6 +431,8 @@
     }
 
     function resetRole() {
+      stopStudentPreviewListeners();
+      if (teacherStatsRefreshTimer) { clearTimeout(teacherStatsRefreshTimer); teacherStatsRefreshTimer = null; }
       if (unsubAssignment) unsubAssignment();
       if (unsubStudents) unsubStudents();
       if (unsubAssignedStudents) unsubAssignedStudents();
@@ -774,6 +779,8 @@
         }, { merge: true }).catch(err => console.warn('Could not sync session-code lookup:', err));
       }
 
+      // Changing assignments must not leave preview listeners attached to the old roster.
+      stopStudentPreviewListeners();
       if (unsubAssignment) unsubAssignment();
       unsubAssignment = db.collection('assignments').doc(assignmentId).onSnapshot(doc => {
         if (!doc.exists) return;
@@ -789,7 +796,7 @@
         currentJoinedStudents = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         renderTeacherRoster();
         // Keep assignment-level progress badges and the overview current after submit/review.
-        loadTeacherStudentStats();
+        scheduleTeacherStudentStatsRefresh();
       }, err => {
         console.warn('Student listener notice:', err);
         currentJoinedStudents = [];
@@ -997,7 +1004,7 @@ async function loadAssignmentProgressCounts(assignment) {
             list.innerHTML = '<p class="text-sm text-slate-400">No assignments yet. Create one to get started.</p>';
             return;
           }
-          loadTeacherStudentStats();
+          scheduleTeacherStudentStatsRefresh();
         docs.forEach(item => {
             const card = document.createElement('button');
             card.type = 'button';
@@ -1072,6 +1079,7 @@ async function loadAssignmentProgressCounts(assignment) {
       countBadge.textContent = `${studentsList.length} Student${studentsList.length === 1 ? '' : 's'} Joined`;
 
       if (studentsList.length === 0) {
+        stopStudentPreviewListeners();
         grid.innerHTML = `
           <div id="emptyStudentState" class="col-span-full text-center py-12 text-slate-400">
             <i class="fa-solid fa-user-clock text-4xl mb-3"></i>
@@ -1120,15 +1128,56 @@ async function loadAssignmentProgressCounts(assignment) {
           try { await setStudentReviewStatus(student, 'completed'); }
           finally { forceCompleted.disabled = false; }
         });
-        if (student.isJoined && db) {
-          db.collection('assignments').doc(currentAssignmentId).collection('students').doc(student.studentUid || student.id)
-            .collection('slides').doc('slide_0').onSnapshot(slideDoc => {
-              const img = document.getElementById(`thumb-${student.id}`);
-              if (img && slideDoc.exists && slideDoc.data().canvasData) img.src = slideDoc.data().canvasData;
-            }, err => console.warn('Student preview listener:', err));
-        }
         grid.appendChild(card);
       });
+      syncStudentPreviewListeners(studentsList);
+    }
+
+    // Remove listeners for students/assignments no longer shown and add only missing ones.
+    // Rerendering the roster no longer creates a second listener for every student.
+    function syncStudentPreviewListeners(studentsList) {
+      const activeKeys = new Set();
+      if (!currentAssignmentId || !db) {
+        stopStudentPreviewListeners();
+        return;
+      }
+      studentsList.forEach(student => {
+        if (!student.isJoined) return;
+        const studentUid = student.studentUid || student.id;
+        if (!studentUid) return;
+        const key = `${currentAssignmentId}:${studentUid}`;
+        activeKeys.add(key);
+        if (studentPreviewUnsubscribers.has(key)) return;
+        const unsubscribe = db.collection('assignments').doc(currentAssignmentId)
+          .collection('students').doc(studentUid).collection('slides').doc('slide_0')
+          .onSnapshot(slideDoc => {
+            const img = document.getElementById(`thumb-${student.id}`);
+            if (!img) return;
+            if (slideDoc.exists && slideDoc.data().canvasData) img.src = slideDoc.data().canvasData;
+            else img.removeAttribute('src');
+          }, err => console.warn('Student preview listener:', err));
+        studentPreviewUnsubscribers.set(key, unsubscribe);
+      });
+      studentPreviewUnsubscribers.forEach((unsubscribe, key) => {
+        if (!activeKeys.has(key)) {
+          unsubscribe();
+          studentPreviewUnsubscribers.delete(key);
+        }
+      });
+    }
+
+    function stopStudentPreviewListeners() {
+      studentPreviewUnsubscribers.forEach(unsubscribe => unsubscribe());
+      studentPreviewUnsubscribers.clear();
+    }
+
+    // Coalesce bursts of roster changes into one statistics refresh.
+    function scheduleTeacherStudentStatsRefresh() {
+      if (teacherStatsRefreshTimer) clearTimeout(teacherStatsRefreshTimer);
+      teacherStatsRefreshTimer = setTimeout(() => {
+        teacherStatsRefreshTimer = null;
+        loadTeacherStudentStats();
+      }, 500);
     }
 
     async function setStudentReviewStatus(student, status) {
