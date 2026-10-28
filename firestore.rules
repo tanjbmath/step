@@ -387,7 +387,7 @@ service cloud.firestore {
               && isAssignmentMember(assignmentId, studentUid)
               && (
                 !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
-                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status != 'helping'
+                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
               )
             ) || ownsAssignment(assignmentId);
           allow delete: if ownsAssignment(assignmentId)
