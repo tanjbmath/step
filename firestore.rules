@@ -249,6 +249,11 @@ service cloud.firestore {
             isOwner(studentUid)
             && request.resource.data.uid == resource.data.uid
             && request.resource.data.sessionCode == resource.data.sessionCode
+            // Reject student help-request writes when the assignment owner has disabled help.
+            && (
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny(['helpRequested', 'helpQuestion', 'helpRequestedAt'])
+              || get(/databases/$(database)/documents/assignments/$(assignmentId)).data.peerHelpEnabled != false
+            )
           ) || ownsAssignment(assignmentId);
 
         allow delete: if ownsAssignment(assignmentId) || isOwner(studentUid);
