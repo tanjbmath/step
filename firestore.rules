@@ -26,10 +26,6 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid));
     }
 
-    function helpLockPath(assignmentId, workKey) {
-      return /databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(workKey);
-    }
-
     match /users/{uid} {
       allow read: if isOwner(uid);
 
@@ -253,50 +249,16 @@ service cloud.firestore {
             isOwner(studentUid)
             && request.resource.data.uid == resource.data.uid
             && request.resource.data.sessionCode == resource.data.sessionCode
-            // A student cannot remove or replace the active lock key while a help request is open.
-            && (
-              !('activeHelpLockKey' in resource.data)
-              || (
-                'activeHelpLockKey' in request.resource.data
-                && (
-                  request.resource.data.activeHelpLockKey == resource.data.activeHelpLockKey
-                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
-                )
-              )
-            )
           ) || ownsAssignment(assignmentId);
 
-        allow delete: if ownsAssignment(assignmentId)
-          || (
-            isOwner(studentUid)
-            && (
-              // If the parent assignment has already been removed, allow cleanup of orphaned work.
-              !exists(/databases/$(database)/documents/assignments/$(assignmentId))
-              || !('activeHelpLockKey' in resource.data)
-              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
-            )
-          );
+        allow delete: if ownsAssignment(assignmentId) || isOwner(studentUid);
 
         match /slides/{slideId} {
           allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
           allow create, update: if (
-              isOwner(studentUid)
-              && isAssignmentMember(assignmentId, studentUid)
-              && (
-                !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
-                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
-              )
+              isOwner(studentUid) && isAssignmentMember(assignmentId, studentUid)
             ) || ownsAssignment(assignmentId);
-          allow delete: if ownsAssignment(assignmentId)
-            || (
-              isOwner(studentUid)
-              && (
-                // Orphaned slides can be removed after the teacher deletes the parent assignment.
-                !exists(/databases/$(database)/documents/assignments/$(assignmentId))
-                || !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
-                || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
-              )
-            );
+          allow delete: if ownsAssignment(assignmentId) || isOwner(studentUid);
         }
       }
     }
