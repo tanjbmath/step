@@ -1443,7 +1443,9 @@ async function loadAssignmentProgressCounts(assignment) {
       studentHistoryScreen.classList.add('hidden');
       teacherDashboard.classList.add('hidden');
       workspaceScreen.classList.remove('hidden');
-      document.getElementById('exitWorkspaceBtn').classList.add('hidden');
+      const exitButton = document.getElementById('exitWorkspaceBtn');
+      exitButton.classList.remove('hidden');
+      exitButton.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back to Dashboard';
       document.getElementById('workspaceTitle').textContent = assignment.title || 'Interactive Assignment';
       document.getElementById('workspaceSubtext').textContent = `Student: ${studentName} (Stylus & Touch Active)`;
       currentSlideIndex = 0;
@@ -1581,7 +1583,9 @@ async function loadAssignmentProgressCounts(assignment) {
       studentJoinScreen.classList.add('hidden');
       studentHistoryScreen.classList.add('hidden');
       workspaceScreen.classList.remove('hidden');
-      document.getElementById('exitWorkspaceBtn').classList.add('hidden');
+      const exitButton = document.getElementById('exitWorkspaceBtn');
+      exitButton.classList.remove('hidden');
+      exitButton.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back to Dashboard';
       document.getElementById('workspaceTitle').textContent = currentAssignmentData.title || "Interactive Assignment";
       document.getElementById('workspaceSubtext').textContent = `Student: ${studentName} (Stylus & Touch Active)`;
 
