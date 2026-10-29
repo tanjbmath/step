@@ -1,0 +1,34 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAssignmentTeacher(assignmentId) {
+      return signedIn()
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'teacher'
+        && firestore.get(/databases/(default)/documents/assignments/$(assignmentId)).data.teacherId == request.auth.uid;
+    }
+
+    function isAssignmentStudent(assignmentId, studentUid) {
+      return signedIn()
+        && request.auth.uid == studentUid
+        && firestore.exists(/databases/(default)/documents/assignments/$(assignmentId)/students/$(studentUid));
+    }
+
+    match /student-work/{assignmentId}/{studentUid}/{fileName} {
+      allow read: if isAssignmentStudent(assignmentId, studentUid)
+        || isAssignmentTeacher(assignmentId);
+
+      allow create, update: if (
+          isAssignmentStudent(assignmentId, studentUid)
+          && request.resource.size < 5 * 1024 * 1024
+          && request.resource.contentType.matches('image/.*')
+        ) || isAssignmentTeacher(assignmentId);
+
+      allow delete: if isAssignmentStudent(assignmentId, studentUid)
+        || isAssignmentTeacher(assignmentId);
+    }
+  }
+}
