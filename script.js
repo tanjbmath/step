@@ -69,6 +69,10 @@
       auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(err => console.warn("Auth persistence:", err));
       auth.onAuthStateChanged(async user => {
         signedInUser = user || null;
+        if (user) {
+          currentClassId = loadActiveClassId(user.uid);
+          selectedClassId = currentClassId;
+        }
         isFirebaseReady = true;
         const signedOut = document.getElementById('signedOutPanel');
         const signedIn = document.getElementById('signedInPanel');
@@ -237,6 +241,55 @@
     let currentAssignmentData = null;
     let currentSessionCode = null;
 
+    // Legacy records without classId are assigned to MB1.
+    // Add future classes here; all new assignment/submission records carry this ID.
+    const STEP_CLASSES = [
+      { id: 'MB1', name: 'MB1', description: 'Current class and existing saved work' }
+    ];
+    let currentClassId = 'MB1';
+    let selectedClassId = 'MB1';
+    let pendingPortalRole = null;
+
+    function activeClassStorageKey(uid = signedInUser?.uid) {
+      return uid ? 'step_active_class_' + uid : null;
+    }
+    function loadActiveClassId(uid = signedInUser?.uid) {
+      try {
+        const key = activeClassStorageKey(uid);
+        const stored = key ? localStorage.getItem(key) : null;
+        return STEP_CLASSES.some(item => item.id === stored) ? stored : 'MB1';
+      } catch (err) { return 'MB1'; }
+    }
+    function isCurrentClass(record) {
+      return (record?.classId || 'MB1') === currentClassId;
+    }
+    function renderClassChoices() {
+      const container = document.getElementById('classOptionsContainer');
+      if (!container) return;
+      container.innerHTML = '';
+      STEP_CLASSES.forEach(item => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('aria-pressed', String(selectedClassId === item.id));
+        button.className = 'p-5 rounded-2xl border-2 text-left transition ' +
+          (selectedClassId === item.id
+            ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-100'
+            : 'border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50');
+        button.innerHTML = '<div class="flex items-start justify-between gap-3"><div><div class="class-option-name text-xl font-extrabold text-slate-800"></div><p class="text-sm text-slate-500 mt-2"></p></div><span class="class-selected-indicator w-7 h-7 rounded-full flex items-center justify-center"></span></div>';
+        button.querySelector('.class-option-name').textContent = item.name;
+        button.querySelector('p').textContent = item.description;
+        const indicator = button.querySelector('.class-selected-indicator');
+        indicator.className += selectedClassId === item.id ? ' bg-indigo-600 text-white' : ' bg-slate-100 text-slate-400';
+        indicator.innerHTML = selectedClassId === item.id ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-circle"></i>';
+        button.addEventListener('click', () => {
+          selectedClassId = item.id;
+          renderClassChoices();
+          saveStepScreenState();
+        });
+        container.appendChild(button);
+      });
+    }
+
     let studentId = null;
     let studentName = null;
     let inspectingStudentId = null;
@@ -252,7 +305,9 @@
       if (restoringStepScreen || !signedInUser) return;
       const isVisible = element => Boolean(element && !element.classList.contains('hidden'));
       let screen = 'role';
-      if (isVisible(workspaceScreen)) screen = 'workspace';
+      const classScreen = document.getElementById('classSelectionScreen');
+      if (isVisible(classScreen)) screen = 'class-selection';
+      else if (isVisible(workspaceScreen)) screen = 'workspace';
       else if (isVisible(teacherDashboard)) screen = 'teacher-dashboard';
       else if (isVisible(studentJoinScreen)) screen = 'student-join';
       else if (isVisible(studentHistoryScreen)) screen = 'student-history';
@@ -261,7 +316,10 @@
       const state = {
         uid: signedInUser.uid,
         screen,
-        role: currentUserRole || (accountRole === 'teacher' ? 'teacher' : 'student'),
+        role: currentUserRole || (pendingPortalRole || (accountRole === 'teacher' ? 'teacher' : 'student')),
+        pendingRole: pendingPortalRole,
+        classId: currentClassId,
+        selectedClassId,
         assignmentId: currentAssignmentId || null,
         sessionCode: currentSessionCode || '',
         studentId: inspectingStudentId || null,
@@ -290,6 +348,15 @@
       if (!state) return false;
       restoringStepScreen = true;
       try {
+        currentClassId = state.classId || loadActiveClassId();
+        selectedClassId = state.selectedClassId || currentClassId;
+        if (state.screen === 'class-selection') {
+          pendingPortalRole = state.pendingRole || state.role || (accountRole === 'teacher' ? 'teacher' : 'student');
+          roleSelectionScreen.classList.add('hidden');
+          document.getElementById('classSelectionScreen').classList.remove('hidden');
+          renderClassChoices();
+          return true;
+        }
         if (state.screen === 'workspace' && state.role === 'teacher' && state.studentId && state.assignmentId) {
           await switchRole('teacher');
           const assignmentDoc = await db.collection('assignments').doc(state.assignmentId).get();
@@ -451,8 +518,29 @@
       if (isOpening) loadTeacherStudentStats();
     });
 
-    document.getElementById('selectTeacherBtn').addEventListener('click', () => switchRole('teacher'));
-    document.getElementById('selectStudentBtn').addEventListener('click', () => switchRole('student'));
+    document.getElementById('selectTeacherBtn').addEventListener('click', () => switchRole('teacher', { fromWelcome: true }));
+    document.getElementById('selectStudentBtn').addEventListener('click', () => switchRole('student', { fromWelcome: true }));
+
+    document.getElementById('backToWelcomeFromClassBtn').addEventListener('click', () => {
+      pendingPortalRole = null;
+      document.getElementById('classSelectionScreen').classList.add('hidden');
+      roleSelectionScreen.classList.remove('hidden');
+      saveStepScreenState();
+    });
+    document.getElementById('continueWithClassBtn').addEventListener('click', async () => {
+      if (!pendingPortalRole) {
+        showToast('Choose Teacher Portal or Student Portal first.', 'error');
+        return;
+      }
+      currentClassId = selectedClassId || 'MB1';
+      try {
+        const key = activeClassStorageKey();
+        if (key) localStorage.setItem(key, currentClassId);
+      } catch (err) { console.warn('Could not save selected class:', err); }
+      saveStepScreenState();
+      const role = pendingPortalRole;
+      await switchRole(role, { skipClassSelection: true });
+    });
     document.getElementById('historyJoinAssignmentBtn').addEventListener('click', () => {
       if (!signedInUser) return showToast('Sign in first.', 'error');
       studentHistoryScreen.classList.add('hidden');
@@ -585,9 +673,22 @@
         }
       }
 
+      if (options.fromWelcome && options.skipClassSelection !== true) {
+        pendingPortalRole = role;
+        selectedClassId = currentClassId;
+        roleSelectionScreen.classList.add('hidden');
+        document.getElementById('classSelectionScreen').classList.remove('hidden');
+        resetRoleBtn.classList.add('hidden');
+        renderClassChoices();
+        saveStepScreenState();
+        return;
+      }
+
       currentUserRole = role;
-      saveStepScreenState();
+      pendingPortalRole = null;
+      document.getElementById('classSelectionScreen').classList.add('hidden');
       roleSelectionScreen.classList.add('hidden');
+      saveStepScreenState();
       studentHistoryScreen.classList.add('hidden');
       resetRoleBtn.classList.remove('hidden');
 
@@ -610,6 +711,7 @@
           renderStudentHistory();
         }
       }
+      saveStepScreenState();
     }
 
     function resetRole() {
@@ -635,6 +737,8 @@
       studentHistoryScreen.classList.add('hidden');
       workspaceScreen.classList.add('hidden');
       document.getElementById('teacherActiveSection').classList.add('hidden');
+      document.getElementById('classSelectionScreen').classList.add('hidden');
+      pendingPortalRole = null;
       
       roleSelectionScreen.classList.remove('hidden');
       resetRoleBtn.classList.add('hidden');
@@ -854,6 +958,7 @@
         description: desc,
         teacherId: signedInUser.uid,
         sessionCode: code,
+        classId: currentClassId,
         slides: slides,
         createdAt: new Date().toISOString(),
         status: 'published',
@@ -877,6 +982,7 @@
         await db.collection('assignmentLookups').doc(code).set({
           assignmentId: docId,
           sessionCode: code,
+          classId: currentClassId,
           teacherId: signedInUser.uid,
           title: title,
           status: 'published',
@@ -956,6 +1062,7 @@
         db.collection('assignmentLookups').doc(currentAssignmentData.sessionCode).set({
           assignmentId,
           sessionCode: currentAssignmentData.sessionCode,
+          classId: currentAssignmentData.classId || 'MB1',
           teacherId: signedInUser.uid,
           title: currentAssignmentData.title || 'Assignment',
           status: currentAssignmentData.status || 'published',
@@ -1098,6 +1205,7 @@
         const students = new Map();
         const studentRosterRefs = new Map();
         for (const assignment of assignments.docs) {
+          if (!isCurrentClass(assignment.data())) continue;
           const [rosterSnapshot, assignedSnapshot] = await Promise.all([
             getTeacherRosterSnapshot(assignment.ref, 'students'),
             getTeacherRosterSnapshot(assignment.ref, 'assignedStudents')
@@ -1206,7 +1314,7 @@ async function loadAssignmentProgressCounts(assignment) {
       list.innerHTML = '<p class="text-sm text-slate-400">Loading assignments...</p>';
       teacherAssignmentsUnsubscribe = db.collection('assignments').where('teacherId', '==', signedInUser.uid)
         .onSnapshot(snapshot => {
-          const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(isCurrentClass);
           docs.sort((a, b) => {
             const at = a.createdAt && a.createdAt.toDate ? a.createdAt.toDate().getTime() : 0;
             const bt = b.createdAt && b.createdAt.toDate ? b.createdAt.toDate().getTime() : 0;
@@ -1549,6 +1657,10 @@ async function loadAssignmentProgressCounts(assignment) {
       const lookupDoc = await db.collection('assignmentLookups').doc(inputCode).get();
       if (!lookupDoc.exists) return false;
       const lookup = lookupDoc.data() || {};
+      if ((lookup.classId || 'MB1') !== currentClassId) {
+        showToast('This assignment belongs to class ' + (lookup.classId || 'MB1') + '. Switch to that class before opening it.', 'error');
+        return true;
+      }
       const assignmentId = lookup.assignmentId;
       if (!assignmentId) return false;
 
@@ -1636,6 +1748,9 @@ async function loadAssignmentProgressCounts(assignment) {
         }
 
         const lookup = lookupDoc.data();
+        if ((lookup.classId || 'MB1') !== currentClassId) {
+          throw new Error('This session code belongs to class ' + (lookup.classId || 'MB1') + '. Select that class before joining.');
+        }
         matchedDocId = lookup.assignmentId;
         if (!matchedDocId) throw new Error('This session code is not configured correctly.');
 
@@ -1702,7 +1817,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const submissionRef = db.collection('users').doc(studentId).collection('submissions').doc(matchedDocId);
         const existingSubmission = await submissionRef.get();
         if (!existingSubmission.exists) {
-          await submissionRef.set({ assignmentId: matchedDocId, title: matchedData.title || lookup.title || 'Assignment',
+          await submissionRef.set({ assignmentId: matchedDocId, classId: matchedData.classId || currentClassId, title: matchedData.title || lookup.title || 'Assignment',
             description: matchedData.description || '', sessionCode: inputCode, status: currentSubmissionStatus,
             startedAt: now, lastWorkedAt: now, slideCount: (matchedData.slides || []).length });
         } else if (currentSubmissionStatus !== 'completed') {
@@ -1767,7 +1882,7 @@ async function loadAssignmentProgressCounts(assignment) {
     function renderCombinedStudentHistory() {
       const list = document.getElementById('studentHistoryList');
       const byAssignment = new Map();
-      studentSubmissionRecords.forEach(item => byAssignment.set(item.assignmentId || item.id, { ...item, assignmentId: item.assignmentId || item.id }));
+      studentSubmissionRecords.filter(isCurrentClass).forEach(item => byAssignment.set(item.assignmentId || item.id, { ...item, assignmentId: item.assignmentId || item.id }));
       studentAssignedRecords.forEach(item => {
         if (!item.assignmentId) return;
         const prior = byAssignment.get(item.assignmentId) || {};
@@ -1899,7 +2014,8 @@ async function loadAssignmentProgressCounts(assignment) {
         await archiveStudentCanvasToStorage(currentAssignmentId, signedInUser.uid);
         const now = firebase.firestore.FieldValue.serverTimestamp();
         await db.collection('users').doc(signedInUser.uid).collection('submissions').doc(currentAssignmentId).set({
-          assignmentId: currentAssignmentId, title: currentAssignmentData?.title || 'Assignment',
+          assignmentId: currentAssignmentId, classId: currentAssignmentData?.classId || currentClassId,
+          title: currentAssignmentData?.title || 'Assignment',
           status: 'submitted', submittedAt: now, lastWorkedAt: now
         }, { merge: true });
         await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid).set({
@@ -1932,7 +2048,12 @@ async function loadAssignmentProgressCounts(assignment) {
           showToast('This assignment is no longer available.', 'error');
           return;
         }
-        currentAssignmentData = doc.data();
+        const savedAssignmentData = doc.data();
+        if (!isCurrentClass(savedAssignmentData)) {
+          showToast('This saved assignment belongs to class ' + (savedAssignmentData.classId || 'MB1') + '. Switch classes to open it.', 'error');
+          return;
+        }
+        currentAssignmentData = savedAssignmentData;
         currentAssignmentId = assignmentId;
         currentSessionCode = currentAssignmentData.sessionCode || submission.sessionCode || '';
         saveStepScreenState();
