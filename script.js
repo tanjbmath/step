@@ -249,6 +249,8 @@
     let requesterHelpLock = false;
     let hasOpenOwnedHelpRequest = false;
     const ownedHelpRequestState = new Map();
+    // IDs cleared from the requester's on-screen activity log; records remain intact for teachers/helpers.
+    const clearedOwnedHelpLogIds = new Set();
     let unsubHelpRequests = null;
     let unsubOwnedHelpRequests = null;
     const ownedHelpRequestListeners = new Map();
@@ -2810,6 +2812,7 @@ async function loadAssignmentProgressCounts(assignment) {
         ownedHelpRequestListeners.clear();
         finishedOwnedHelpRequestListeners.clear();
         ownedHelpRequestState.clear();
+        clearedOwnedHelpLogIds.clear();
         teacherRequesterLabelCache.clear();
         requesterHelpLock = false;
         peerHelpListeningAssignmentId = currentAssignmentId;
@@ -2826,6 +2829,8 @@ async function loadAssignmentProgressCounts(assignment) {
       const peerMode = isPeerHelpEnabled();
       if (queue) queue.classList.toggle('hidden', currentUserRole !== 'teacher' && !peerMode);
       if (refresh) refresh.classList.toggle('hidden', currentUserRole !== 'teacher' && !peerMode);
+      const clearLogButton = document.getElementById('clearPeerHelpLogBtn');
+      if (clearLogButton) clearLogButton.classList.toggle('hidden', currentUserRole === 'teacher');
       if (hint) hint.textContent = peerMode ? 'Ask for help or help a peer with this assignment.' : 'Teacher Help only. Your latest two requests appear below.';
 
       const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
@@ -2930,7 +2935,7 @@ async function loadAssignmentProgressCounts(assignment) {
                 requesterHelpLock = false;
                 updatePeerHelpControls();
               }
-            } else if (['acknowledged', 'expired'].includes(data.status)) {
+            } else if (['acknowledged', 'expired', 'cancelled'].includes(data.status)) {
               requesterHelpLock = false;
               updatePeerHelpControls();
               const stopListening = ownedHelpRequestListeners.get(requestDoc.id);
@@ -2959,7 +2964,7 @@ async function loadAssignmentProgressCounts(assignment) {
       updateSubmitAssignmentButton();
       if (!list) return;
       list.innerHTML = '';
-      const latestItems = items.slice().sort((a, b) => {
+      const latestItems = items.filter(item => !clearedOwnedHelpLogIds.has(item.id)).slice().sort((a, b) => {
         const at = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
         const bt = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
         return bt - at;
@@ -2980,10 +2985,61 @@ async function loadAssignmentProgressCounts(assignment) {
         status.className = 'text-xs text-slate-500 mt-1';
         status.textContent = item.status === 'helping' ? 'Someone is helping — your canvas is locked temporarily.' :
           item.status === 'submitted' || item.status === 'acknowledged' ? 'Help completed. You can continue working.' :
+          item.status === 'cancelled' ? 'You cancelled this request. You can continue working.' :
           item.status === 'expired' ? 'Request expired. You can continue working.' : 'Waiting for an eligible peer.';
         card.append(question, status);
+        if (item.status === 'pending') {
+          const actions = document.createElement('div');
+          actions.className = 'mt-2';
+          const cancelButton = document.createElement('button');
+          cancelButton.type = 'button';
+          cancelButton.className = 'px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-semibold';
+          cancelButton.textContent = 'Cancel request';
+          cancelButton.addEventListener('click', () => cancelOwnedPeerHelpRequest(item.id));
+          actions.appendChild(cancelButton);
+          card.appendChild(actions);
+        }
         list.prepend(card);
       });
+    }
+
+    async function cancelOwnedPeerHelpRequest(requestId) {
+      if (!signedInUser || !currentAssignmentId || !requestId) return;
+      const item = ownedHelpRequestState.get(requestId);
+      if (!item || item.status !== 'pending') {
+        showToast('This request can only be cancelled before someone starts helping.', 'info');
+        return;
+      }
+      const card = document.querySelector(`[data-owned-request="${requestId}"]`);
+      const button = card?.querySelector('button');
+      if (button) button.disabled = true;
+      try {
+        const requestRef = peerHelpRequestRef(requestId);
+        await db.runTransaction(async transaction => {
+          const requestSnapshot = await transaction.get(requestRef);
+          if (!requestSnapshot.exists || requestSnapshot.data().status !== 'pending') {
+            throw new Error('Someone has already started helping, or this request is no longer pending.');
+          }
+          const lockRef = peerHelpLockRef(requestSnapshot.data().workKey);
+          const lockSnapshot = await transaction.get(lockRef);
+          if (!lockSnapshot.exists || lockSnapshot.data().status !== 'pending') {
+            throw new Error('This request has already been claimed and cannot be cancelled.');
+          }
+          const now = firebase.firestore.FieldValue.serverTimestamp();
+          transaction.update(requestRef, { status: 'cancelled', cancelledAt: now, updatedAt: now });
+          transaction.update(lockRef, { status: 'cancelled', updatedAt: now });
+        });
+        showToast('Help request cancelled.', 'success');
+      } catch (err) {
+        console.warn('Could not cancel help request:', err);
+        showToast(err.message || 'Could not cancel this help request.', 'error');
+      }
+    }
+
+    function clearOwnedPeerHelpLog() {
+      Array.from(ownedHelpRequestState.keys()).forEach(id => clearedOwnedHelpLogIds.add(id));
+      renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
+      showToast('Help request log cleared from this window. Request records are unchanged.', 'success');
     }
 
     async function createPeerHelpRequest(question) {
@@ -3347,6 +3403,7 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('submitPeerHelpBtn').addEventListener('click', () => activeHelpRequestId && submitPeerHelp(activeHelpRequestId, false));
     document.getElementById('teacherSubmitPeerHelpBtn').addEventListener('click', () => activeHelpRequestId && submitPeerHelp(activeHelpRequestId, true));
     document.getElementById('refreshPeerHelpBtn').addEventListener('click', startPeerHelpListeners);
+    document.getElementById('clearPeerHelpLogBtn').addEventListener('click', clearOwnedPeerHelpLog);
     document.getElementById('teacherRefreshPeerHelpBtn').addEventListener('click', () => startTeacherHelpMonitor(currentAssignmentId));
 
     // ==========================================
