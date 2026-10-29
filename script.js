@@ -1601,7 +1601,8 @@ async function loadAssignmentProgressCounts(assignment) {
     async function setStudentReviewStatus(student, status) {
       if (!currentAssignmentId || !signedInUser || !db) return;
       try {
-        const update = { status, reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        const update = { status, classId: currentAssignmentData?.classId || currentClassId,
+          reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
           reviewOutcome: status === 'completed' ? 'completed' : 'amendments-needed' };
         const writes = [];
         if (student.assignedStudentKey) {
@@ -2418,6 +2419,7 @@ async function loadAssignmentProgressCounts(assignment) {
             }, { merge: true });
           await db.collection('users').doc(targetStudentId).collection('submissions').doc(assignmentId).set({
             assignmentId,
+            classId: currentAssignmentData.classId || currentClassId,
             title: currentAssignmentData.title || 'Assignment',
             description: currentAssignmentData.description || '',
             sessionCode: currentSessionCode || currentAssignmentData.sessionCode || '',
