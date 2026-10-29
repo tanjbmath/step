@@ -243,9 +243,38 @@
 
     // Legacy records without classId are assigned to MB1.
     // Add future classes here; all new assignment/submission records carry this ID.
-    const STEP_CLASSES = [
-      { id: 'MB1', name: 'MB1', description: 'Current class and existing saved work' }
+    const STEP_DEFAULT_CLASSES = [
+      { id: 'MB1', name: 'MB1', description: 'Current class and existing saved work', builtIn: true }
     ];
+    let STEP_CLASSES = [...STEP_DEFAULT_CLASSES];
+    let classManagementBusy = false;
+
+    async function loadClassRegistry() {
+      if (!signedInUser || !db) return;
+      try {
+        const snapshot = await db.collection('classes').get();
+        const byId = new Map(STEP_DEFAULT_CLASSES.map(item => [item.id, item]));
+        snapshot.docs.forEach(doc => {
+          const data = doc.data() || {};
+          if (data.deleted === true) { byId.delete(doc.id); return; }
+          if (typeof data.name === 'string' && data.name.trim()) {
+            byId.set(doc.id, {
+              id: doc.id, name: data.name.trim(),
+              description: data.description || 'Class assignments and student work',
+              ownerTeacherId: data.ownerTeacherId || null, builtIn: doc.id === 'MB1'
+            });
+          }
+        });
+        STEP_CLASSES = [...byId.values()].sort((a, b) =>
+          a.id === 'MB1' ? -1 : b.id === 'MB1' ? 1 : a.name.localeCompare(b.name));
+      } catch (err) { console.error('Could not load class registry:', err); }
+    }
+
+    function renderClassManagementControls() {
+      const controls = document.getElementById('classManagementControls');
+      if (controls) controls.classList.toggle('hidden',
+        !(pendingPortalRole === 'teacher' && accountRole === 'teacher'));
+    }
     let currentClassId = 'MB1';
     let selectedClassId = 'MB1';
     let pendingPortalRole = null;
