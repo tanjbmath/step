@@ -419,6 +419,13 @@
           await batch.commit();
         }
       }
+      const teacherEvents = await db.collection('users').doc(signedInUser.uid)
+        .collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get();
+      for (let i = 0; i < teacherEvents.docs.length; i += 400) {
+        const batch = db.batch();
+        teacherEvents.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+      }
       const assigned = await ref.collection('assignedStudents').get();
       for (let i = 0; i < assigned.docs.length; i += 400) {
         const batch = db.batch();
