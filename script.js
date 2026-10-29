@@ -1951,10 +1951,14 @@ async function loadAssignmentProgressCounts(assignment) {
       if (!slideData) return;
       const drawImageSource = src => {
         const img = new Image();
+        // Storage download URLs are cross-origin. Set CORS mode before src so
+        // drawing the archived canvas does not taint mainCanvas and block
+        // getImageData()/toDataURL() during annotation and save.
+        img.crossOrigin = 'anonymous';
         img.onload = () => {
           if (!isDrawing && isCurrent()) ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
         };
-        img.onerror = () => console.warn('Could not load saved canvas image.');
+        img.onerror = () => console.warn('Could not load saved canvas image. Check Firebase Storage CORS configuration.');
         img.src = src;
       };
       // Prefer the live canvas while work is in progress; archived submissions use Storage.
