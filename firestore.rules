@@ -529,10 +529,10 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/assignments/$(assignmentId))
           && exists(/databases/$(database)/documents/users/$(request.auth.uid))
           && (
-            get(/databases/$(database)/documents/assignments/$(assignmentId)).data.classId
-              == get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.classId
-            || (!('classId' in get(/databases/$(database)/documents/assignments/$(assignmentId)).data)
-              && get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.classId == 'MB1')
+            (('classId' in get(/databases/$(database)/documents/assignments/$(assignmentId)).data)
+              ? get(/databases/$(database)/documents/assignments/$(assignmentId)).data.classId : 'MB1')
+            == (('classId' in get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data)
+              ? get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.classId : 'MB1')
           )
           && (
             (
