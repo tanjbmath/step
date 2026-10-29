@@ -649,7 +649,7 @@
           // Older sessions may have saved the student class picker before it was removed.
           if (accountRole !== 'teacher') {
             pendingPortalRole = null;
-            currentClassId = studentClassId || 'MB1';
+            currentClassId = currentClassId || 'MB1';
             selectedClassId = currentClassId;
             document.getElementById('classSelectionScreen').classList.add('hidden');
             roleSelectionScreen.classList.remove('hidden');
@@ -2172,8 +2172,8 @@ async function loadAssignmentProgressCounts(assignment) {
         }
       } catch (err) {
         console.error('Could not join assignment:', err);
-        const message = err.code === 'permission-denied' && studentClassId
-          ? 'This account is assigned to a different class. Ask your teacher to check your class assignment.'
+        const message = err.code === 'permission-denied'
+          ? 'S.T.E.P. could not verify access to this assignment. Check that the join link is valid and try again.'
           : err.message;
         showToast('Could not join assignment: ' + message, 'error');
         joinBtn.disabled = false;
