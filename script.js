@@ -251,6 +251,24 @@
     const ownedHelpRequestState = new Map();
     // IDs cleared from the requester's on-screen activity log; records remain intact for teachers/helpers.
     const clearedOwnedHelpLogIds = new Set();
+
+    function ownedHelpLogStorageKey() {
+      return currentAssignmentId && signedInUser
+        ? `step_cleared_help_log_${currentAssignmentId}_${signedInUser.uid}`
+        : null;
+    }
+
+    function loadClearedOwnedHelpLogIds() {
+      clearedOwnedHelpLogIds.clear();
+      const key = ownedHelpLogStorageKey();
+      if (!key) return;
+      try {
+        const ids = JSON.parse(localStorage.getItem(key) || '[]');
+        if (Array.isArray(ids)) ids.forEach(id => { if (typeof id === 'string') clearedOwnedHelpLogIds.add(id); });
+      } catch (err) {
+        console.warn('Could not load cleared help log state:', err);
+      }
+    }
     let unsubHelpRequests = null;
     let unsubOwnedHelpRequests = null;
     const ownedHelpRequestListeners = new Map();
@@ -2812,7 +2830,7 @@ async function loadAssignmentProgressCounts(assignment) {
         ownedHelpRequestListeners.clear();
         finishedOwnedHelpRequestListeners.clear();
         ownedHelpRequestState.clear();
-        clearedOwnedHelpLogIds.clear();
+        loadClearedOwnedHelpLogIds();
         teacherRequesterLabelCache.clear();
         requesterHelpLock = false;
         peerHelpListeningAssignmentId = currentAssignmentId;
@@ -3038,6 +3056,11 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function clearOwnedPeerHelpLog() {
       Array.from(ownedHelpRequestState.keys()).forEach(id => clearedOwnedHelpLogIds.add(id));
+      const key = ownedHelpLogStorageKey();
+      if (key) {
+        try { localStorage.setItem(key, JSON.stringify(Array.from(clearedOwnedHelpLogIds))); }
+        catch (err) { console.warn('Could not persist cleared help log state:', err); }
+      }
       renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
       showToast('Help request log cleared from this window. Request records are unchanged.', 'success');
     }
