@@ -268,26 +268,41 @@
       if (!container) return;
       container.innerHTML = '';
       STEP_CLASSES.forEach(item => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.setAttribute('aria-pressed', String(selectedClassId === item.id));
-        button.className = 'p-5 rounded-2xl border-2 text-left transition ' +
+        const card = document.createElement('div');
+        card.className = 'rounded-2xl border-2 p-3 transition ' +
           (selectedClassId === item.id
             ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-100'
-            : 'border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50');
-        button.innerHTML = '<div class="flex items-start justify-between gap-3"><div><div class="class-option-name text-xl font-extrabold text-slate-800"></div><p class="text-sm text-slate-500 mt-2"></p></div><span class="class-selected-indicator w-7 h-7 rounded-full flex items-center justify-center"></span></div>';
-        button.querySelector('.class-option-name').textContent = item.name;
-        button.querySelector('p').textContent = item.description;
-        const indicator = button.querySelector('.class-selected-indicator');
+            : 'border-slate-200 bg-white hover:border-indigo-300');
+        const selectButton = document.createElement('button');
+        selectButton.type = 'button';
+        selectButton.setAttribute('aria-pressed', String(selectedClassId === item.id));
+        selectButton.className = 'w-full rounded-xl p-2 text-left';
+        selectButton.innerHTML = '<div class="flex items-start justify-between gap-3"><div><div class="class-option-name text-xl font-extrabold text-slate-800"></div><p class="class-option-description text-sm text-slate-500 mt-2"></p></div><span class="class-selected-indicator w-7 h-7 rounded-full flex items-center justify-center"></span></div>';
+        selectButton.querySelector('.class-option-name').textContent = item.name;
+        selectButton.querySelector('.class-option-description').textContent = item.description;
+        const indicator = selectButton.querySelector('.class-selected-indicator');
         indicator.className += selectedClassId === item.id ? ' bg-indigo-600 text-white' : ' bg-slate-100 text-slate-400';
         indicator.innerHTML = selectedClassId === item.id ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-circle"></i>';
-        button.addEventListener('click', () => {
+        selectButton.addEventListener('click', () => {
           selectedClassId = item.id;
           renderClassChoices();
           saveStepScreenState();
         });
-        container.appendChild(button);
+        card.appendChild(selectButton);
+        if (pendingPortalRole === 'teacher' && accountRole === 'teacher') {
+          const canDelete = !item.ownerTeacherId || item.ownerTeacherId === signedInUser?.uid;
+          const deleteButton = document.createElement('button');
+          deleteButton.type = 'button';
+          deleteButton.dataset.deleteClass = item.id;
+          deleteButton.className = 'mt-3 w-full rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50';
+          deleteButton.textContent = canDelete ? 'Delete Class' : 'Created by another teacher';
+          deleteButton.disabled = !canDelete || classManagementBusy;
+          deleteButton.addEventListener('click', () => deleteClassFromSelection(item.id));
+          card.appendChild(deleteButton);
+        }
+        container.appendChild(card);
       });
+      renderClassManagementControls();
     }
 
     let studentId = null;
