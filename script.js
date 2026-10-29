@@ -116,26 +116,11 @@
             }
             studentClassId = typeof profileData.studentClassId === 'string' && profileData.studentClassId.trim()
               ? profileData.studentClassId.trim() : null;
-            // Migrate existing students by locking them to the class of their most recently
-            // worked assignment, rather than trusting a stale class ID in browser storage.
-            if (!studentClassId && profileData.role !== 'teacher') {
-              try {
-                const priorWork = await userRef.collection('submissions').get();
-                const records = priorWork.docs.map(doc => ({ ...doc.data(), classId: doc.data().classId || 'MB1' }));
-                const timeOf = value => value?.toDate ? value.toDate().getTime()
-                  : (typeof value === 'string' ? (Date.parse(value) || 0) : 0);
-                records.sort((a, b) => Math.max(timeOf(b.lastWorkedAt), timeOf(b.startedAt), timeOf(b.submittedAt))
-                  - Math.max(timeOf(a.lastWorkedAt), timeOf(a.startedAt), timeOf(a.submittedAt)));
-                if (records.length) {
-                  studentClassId = records[0].classId;
-                  await userRef.set({ studentClassId }, { merge: true });
-                }
-              } catch (migrationError) {
-                console.warn('Could not migrate the existing student class:', migrationError);
-              }
-            }
             if (profileData.role !== 'teacher') {
-              currentClassId = studentClassId || 'MB1';
+              await loadClassRegistry();
+              const joinedClassIds = await getStudentJoinedClassIds(user.uid);
+              const storedClassId = loadActiveClassId(user.uid);
+              currentClassId = joinedClassIds.includes(storedClassId) ? storedClassId : (joinedClassIds[0] || 'MB1');
               selectedClassId = currentClassId;
               try { localStorage.setItem(activeClassStorageKey(user.uid), currentClassId); } catch (_) {}
             }
@@ -342,13 +327,41 @@
         badge.classList.remove('hidden');
       }
     }
-    function renderClassChoices() {
+    let studentVisibleClassIds = [];
+
+    async function getStudentJoinedClassIds(uid = signedInUser?.uid) {
+      if (!uid || !db) return [];
+      const ids = new Set();
+      try {
+        const memberships = await db.collection('users').doc(uid).collection('classes').get();
+        memberships.docs.forEach(doc => ids.add(doc.id));
+      } catch (err) { console.warn('Could not load class memberships:', err); }
+      try {
+        const submissions = await db.collection('users').doc(uid).collection('submissions').get();
+        submissions.docs.forEach(doc => ids.add((doc.data() || {}).classId || 'MB1'));
+      } catch (err) { console.warn('Could not load legacy class history:', err); }
+      return [...ids];
+    }
+
+    async function renderClassChoices() {
       const container = document.getElementById('classOptionsContainer');
       if (!container) return;
       container.innerHTML = '';
-      const visibleClasses = pendingPortalRole === 'teacher'
-        ? STEP_CLASSES.filter(item => !item.ownerTeacherId || item.ownerTeacherId === signedInUser?.uid)
-        : STEP_CLASSES;
+      let visibleClasses;
+      if (pendingPortalRole === 'teacher') {
+        visibleClasses = STEP_CLASSES.filter(item => !item.ownerTeacherId || item.ownerTeacherId === signedInUser?.uid);
+      } else {
+        studentVisibleClassIds = await getStudentJoinedClassIds();
+        visibleClasses = STEP_CLASSES.filter(item => studentVisibleClassIds.includes(item.id));
+      }
+      if (!visibleClasses.length) {
+        const empty = document.createElement('p');
+        empty.className = 'col-span-full rounded-xl border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500';
+        empty.textContent = pendingPortalRole === 'teacher'
+          ? 'No classes are available yet.'
+          : 'You have not joined a class yet. Open an assignment link from your teacher to add your first class.';
+        container.appendChild(empty);
+      }
       visibleClasses.forEach(item => {
         const card = document.createElement('div');
         card.className = 'rounded-2xl border-2 p-3 transition ' +
@@ -812,10 +825,14 @@
 
     document.getElementById('selectTeacherBtn').addEventListener('click', () => switchRole('teacher', { fromWelcome: true }));
     document.getElementById('selectStudentBtn').addEventListener('click', async () => {
-      // Student Portal never opens the class picker. Resume the locked class, or use MB1
-      // until the student joins their first session and gets a class lock.
-      setActiveClass(studentClassId || 'MB1');
-      await switchRole('student', { fromWelcome: true, skipClassSelection: true });
+      pendingPortalRole = 'student';
+      selectedClassId = currentClassId;
+      roleSelectionScreen.classList.add('hidden');
+      document.getElementById('classSelectionScreen').classList.remove('hidden');
+      resetRoleBtn.classList.add('hidden');
+      await loadClassRegistry();
+      await renderClassChoices();
+      saveStepScreenState();
     });
 
     document.getElementById('createClassBtn').addEventListener('click', createClassFromForm);
@@ -833,6 +850,13 @@
       if (!pendingPortalRole) {
         showToast('Choose Teacher Portal or Student Portal first.', 'error');
         return;
+      }
+      if (pendingPortalRole === 'student') {
+        studentVisibleClassIds = await getStudentJoinedClassIds();
+        if (!studentVisibleClassIds.includes(selectedClassId)) {
+          showToast('Join an assignment link from that class before selecting it.', 'error');
+          return;
+        }
       }
       currentClassId = selectedClassId || 'MB1';
       try {
@@ -1986,6 +2010,12 @@ async function loadAssignmentProgressCounts(assignment) {
       }
       const membership = membershipDoc.data() || {};
       const assignment = assignmentDoc.data() || {};
+      const joinedClassId = lookup.classId || assignment.classId || 'MB1';
+      await db.collection('users').doc(signedInUser.uid).collection('classes').doc(joinedClassId).set({
+        classId: joinedClassId,
+        assignmentId,
+        joinedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
       const assignedKey = studentKeyForEmail(signedInUser.email);
       const assignedRef = assignmentRef.collection('assignedStudents').doc(assignedKey);
       const assignedDoc = await assignedRef.get();
@@ -2059,9 +2089,6 @@ async function loadAssignmentProgressCounts(assignment) {
 
         const lookup = lookupDoc.data();
         const sessionClassId = lookup.classId || 'MB1';
-        if (studentClassId && studentClassId !== sessionClassId) {
-          throw new Error('This account is assigned to class ' + getClassDisplayName(studentClassId) + ' and cannot join a session from another class. Ask your teacher to check your class assignment.');
-        }
         matchedDocId = lookup.assignmentId;
         if (!matchedDocId) throw new Error('This session code is not configured correctly.');
 
@@ -2077,12 +2104,8 @@ async function loadAssignmentProgressCounts(assignment) {
           const profileData = userSnapshot.exists ? userSnapshot.data() : {};
           const savedName = typeof profileData.studentName === 'string' ? profileData.studentName.trim() : '';
           const chosenName = savedName || name;
-          if (profileData.studentClassId && profileData.studentClassId !== sessionClassId) {
-            throw new Error('This account is already assigned to a different class. Ask your teacher to check your class assignment.');
-          }
-          // Lock the account to its first joined session's class; later sessions must match.
+          // Class membership is stored per class, not as a single account-wide lock.
           transaction.set(userRef, {
-            studentClassId: sessionClassId,
             ...(!savedName ? { studentName: chosenName, studentNameSetAt: now } : {})
           }, { merge: true });
           // The directory stores only the student's chosen display name, not email or other profile data.
@@ -2093,7 +2116,6 @@ async function loadAssignmentProgressCounts(assignment) {
           }, { merge: true });
           return chosenName;
         });
-        studentClassId = sessionClassId;
         await loadClassRegistry();
         setActiveClass(sessionClassId);
         name = canonicalName;
@@ -2116,6 +2138,11 @@ async function loadAssignmentProgressCounts(assignment) {
             lastWorkedAt: now
           }, { merge: true });
         const joinedStudentDoc = await joinedStudentRef.get();
+        await db.collection('users').doc(studentId).collection('classes').doc(sessionClassId).set({
+          classId: sessionClassId,
+          assignmentId: matchedDocId,
+          joinedAt: now
+        }, { merge: true });
         window.currentStudentHelpRequested = Boolean(joinedStudentDoc.exists && joinedStudentDoc.data().helpRequested);
         window.currentStudentHelpQuestion = joinedStudentDoc.exists ? (joinedStudentDoc.data().helpQuestion || '') : '';
 
