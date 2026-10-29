@@ -15,6 +15,7 @@
 
     let db = null;
     let auth = null;
+    let storage = null;
     let isFirebaseReady = false;
     let signedInUser = null;
     // Canonical student name stored once per authenticated account.
@@ -63,6 +64,7 @@
       firebase.initializeApp(firebaseConfig);
       db = firebase.firestore();
       auth = firebase.auth();
+      storage = firebase.storage();
       auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(err => console.warn("Auth persistence:", err));
       auth.onAuthStateChanged(async user => {
         signedInUser = user || null;
@@ -1680,11 +1682,47 @@ async function loadAssignmentProgressCounts(assignment) {
       document.getElementById('workspaceSubtext').textContent = "Amendments requested • Teacher annotations live-sync to the student";
     });
 
+    // Archive a student's completed canvas snapshots in Cloud Storage, then remove the
+    // large data URL from Firestore. The live canvas still uses Firestore while in progress.
+    async function archiveStudentCanvasToStorage(assignmentId, studentUid) {
+      if (!storage || !db || !assignmentId || !studentUid) {
+        throw new Error('Firebase Storage is not initialized.');
+      }
+      const slidesRef = db.collection('assignments').doc(assignmentId)
+        .collection('students').doc(studentUid).collection('slides');
+      const snapshot = await slidesRef.get();
+      for (const slideDoc of snapshot.docs) {
+        const slideData = slideDoc.data() || {};
+        if (!slideData.canvasData) continue;
+        const dataUrl = slideData.canvasData;
+        if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+          console.warn('Skipping unsupported canvas image format for', slideDoc.id);
+          continue;
+        }
+        const storagePath = `student-work/${assignmentId}/${studentUid}/${slideDoc.id}.jpg`;
+        const fileRef = storage.ref(storagePath);
+        await fileRef.putString(dataUrl, 'data_url', {
+          contentType: dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg',
+          cacheControl: 'private, max-age=0, no-cache'
+        });
+        // Only clear the Firestore image after the upload succeeds.
+        await slideDoc.ref.update({
+          canvasStoragePath: storagePath,
+          canvasData: firebase.firestore.FieldValue.delete(),
+          archivedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+    }
+
     document.getElementById('submitAssignmentBtn').addEventListener('click', async () => {
       if (!signedInUser || !currentAssignmentId || currentSubmissionStatus !== 'in-progress') return;
       const button = document.getElementById('submitAssignmentBtn');
       button.disabled = true;
       try {
+        // Flush any pending two-second canvas save before archiving the submission.
+        await flushCanvasSaveToFirestore();
+        await archiveStudentCanvasToStorage(currentAssignmentId, signedInUser.uid);
         const now = firebase.firestore.FieldValue.serverTimestamp();
         await db.collection('users').doc(signedInUser.uid).collection('submissions').doc(currentAssignmentId).set({
           assignmentId: currentAssignmentId, title: currentAssignmentData?.title || 'Assignment',
@@ -1900,6 +1938,34 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
+    function drawCanvasFromSlideData(slideData, isCurrent = () => true) {
+      if (!slideData) return;
+      const drawImageSource = src => {
+        const img = new Image();
+        img.onload = () => {
+          if (!isDrawing && isCurrent()) ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
+        };
+        img.onerror = () => console.warn('Could not load saved canvas image.');
+        img.src = src;
+      };
+      // Prefer the live canvas while work is in progress; archived submissions use Storage.
+      if (slideData.canvasData) {
+        drawImageSource(slideData.canvasData);
+      } else if (slideData.canvasStoragePath && storage) {
+        storage.ref(slideData.canvasStoragePath).getDownloadURL()
+          .then(url => {
+            if (!isCurrent()) return;
+            const separator = url.includes('?') ? '&' : '?';
+            drawImageSource(url + separator + 'v=' + encodeURIComponent(
+              slideData.updatedAt && typeof slideData.updatedAt.toMillis === 'function'
+                ? slideData.updatedAt.toMillis()
+                : Date.now()
+            ));
+          })
+          .catch(err => console.warn('Could not load archived canvas from Storage:', err));
+      }
+    }
+
     function loadCurrentSlideData() {
       if (!currentAssignmentId) return;
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
@@ -1908,25 +1974,17 @@ async function loadAssignmentProgressCounts(assignment) {
       if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)
           && !(activeHelpMode === 'teacher' && inspectingStudentId)) {
         const requestId = activeHelpRequestId;
-        unsubSlideWork = db.collection('assignments').doc(currentAssignmentId)
+        const assignmentId = currentAssignmentId;
+        const slideIndex = currentSlideIndex;
+        unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('helpRequests').doc(requestId)
-          .collection('slides').doc(`slide_${currentSlideIndex}`)
+          .collection('slides').doc(`slide_${slideIndex}`)
           .onSnapshot(doc => {
-            // A live Firestore echo must never repaint the canvas mid-stroke.
             if (isDrawing || activeHelpRequestId !== requestId) return;
             redrawBackgroundAndCanvas();
-            if (doc.exists) {
-              const slideData = doc.data() || {};
-              if (slideData.canvasData) {
-                const img = new Image();
-                img.onload = () => {
-                  if (!isDrawing && activeHelpRequestId === requestId) {
-                    ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
-                  }
-                };
-                img.src = slideData.canvasData;
-              }
-            }
+            if (doc.exists) drawCanvasFromSlideData(doc.data() || {}, () =>
+              !isDrawing && activeHelpRequestId === requestId
+              && currentAssignmentId === assignmentId && currentSlideIndex === slideIndex);
           }, err => console.warn("Help request slide listener notice:", err));
         return;
       }
@@ -1934,21 +1992,18 @@ async function loadAssignmentProgressCounts(assignment) {
       const targetStudentId = inspectingStudentId || studentId;
       if (!targetStudentId) return;
       if (db) {
-        unsubSlideWork = db.collection('assignments').doc(currentAssignmentId)
+        const assignmentId = currentAssignmentId;
+        const slideIndex = currentSlideIndex;
+        unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('students').doc(targetStudentId)
-          .collection('slides').doc(`slide_${currentSlideIndex}`)
+          .collection('slides').doc(`slide_${slideIndex}`)
           .onSnapshot(doc => {
-            // A live Firestore echo must never repaint the canvas mid-stroke.
             if (isDrawing) return;
             redrawBackgroundAndCanvas();
-            if (doc.exists) {
-              const slideData = doc.data() || {};
-              if (slideData.canvasData) {
-                const img = new Image();
-                img.onload = () => ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
-                img.src = slideData.canvasData;
-              }
-            }
+            if (doc.exists) drawCanvasFromSlideData(doc.data() || {}, () =>
+              !isDrawing && currentAssignmentId === assignmentId
+              && currentSlideIndex === slideIndex
+              && (inspectingStudentId || studentId) === targetStudentId);
           }, err => console.warn("Slide listener notice:", err));
       } else {
         redrawBackgroundAndCanvas();
