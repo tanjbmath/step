@@ -2078,10 +2078,28 @@ async function loadAssignmentProgressCounts(assignment) {
           return;
         }
         if (db && inspectingStudentId && currentUserRole === 'teacher') {
-          await db.collection('assignments').doc(assignmentId)
+          // Submitted canvases may already live only in Storage. Save teacher annotations
+          // directly to the same Storage object instead of recreating a large Firestore
+          // canvasData field (which can exceed Firestore's document-size limit).
+          const slideRef = db.collection('assignments').doc(assignmentId)
             .collection('students').doc(targetStudentId)
-            .collection('slides').doc(`slide_${slideIndex}`)
-            .set({ canvasData: dataUrl, updatedAt: now, teacherAnnotatedAt: now, teacherAnnotatedBy: signedInUser?.uid || null }, { merge: true });
+            .collection('slides').doc(`slide_${slideIndex}`);
+          const slideSnapshot = await slideRef.get();
+          const existingSlideData = slideSnapshot.exists ? (slideSnapshot.data() || {}) : {};
+          const storagePath = existingSlideData.canvasStoragePath
+            || `student-work/${assignmentId}/${targetStudentId}/slide_${slideIndex}.jpg`;
+          const fileRef = storage.ref(storagePath);
+          await fileRef.putString(dataUrl, 'data_url', {
+            contentType: 'image/jpeg',
+            cacheControl: 'private, max-age=0, no-cache'
+          });
+          await slideRef.set({
+            canvasStoragePath: storagePath,
+            canvasData: firebase.firestore.FieldValue.delete(),
+            updatedAt: now,
+            teacherAnnotatedAt: now,
+            teacherAnnotatedBy: signedInUser?.uid || null
+          }, { merge: true });
           return;
         }
         if (db && signedInUser && targetStudentId === signedInUser.uid && currentSubmissionStatus === 'in-progress') {
