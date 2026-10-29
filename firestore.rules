@@ -120,7 +120,8 @@ service cloud.firestore {
             && request.resource.data.keys().hasOnly(['eventType', 'assignmentId', 'requestId', 'requesterUid', 'helperUid', 'createdAt'])
           );
 
-        allow update, delete: if false;
+        allow update: if false;
+        allow delete: if isTeacher() && ownsAssignment(resource.data.assignmentId);
       }
 
       match /submissions/{assignmentId} {
