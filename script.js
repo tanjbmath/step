@@ -292,7 +292,7 @@
       try {
         const key = activeClassStorageKey(uid);
         const stored = key ? localStorage.getItem(key) : null;
-        return STEP_CLASSES.some(item => item.id === stored) ? stored : 'MB1';
+        return stored || 'MB1';
       } catch (err) { return 'MB1'; }
     }
     function isCurrentClass(record) {
