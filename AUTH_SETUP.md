@@ -53,3 +53,11 @@ This branch adds Google sign-in, student work history, and restricted session-co
 - [ ] Confirm a student cannot grant themselves the teacher role.
 
 Automated browser integration tests and Firebase Rules Emulator tests have not been run by this repository edit. Complete the checklist in a Firebase test project before production use.
+
+## Canvas image storage
+
+- While a student is actively working, the current canvas snapshot continues to sync through Firestore so the existing teacher live-view workflow remains intact.
+- On student submission, each saved slide image is uploaded to Cloud Storage under `student-work/<assignmentId>/<studentUid>/<slideId>.jpg`. After a successful upload, the large Firestore `canvasData` field is removed and replaced with `canvasStoragePath`.
+- The teacher view loads archived slides from Storage. When a teacher finishes review, the latest annotated canvas is archived again.
+- Before enabling this feature in production, publish the repository's `storage.rules` in Firebase Console → Storage → Rules. Test with a teacher account and student account first. Storage rules use Firestore membership and assignment ownership to authorize access.
+- This change archives canvas slides only. Existing assignment question images stored as Base64 data URLs in Firestore are not migrated by this feature.
