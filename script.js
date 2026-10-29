@@ -114,6 +114,13 @@
               nameInput.readOnly = Boolean(studentProfileName);
               nameInput.title = studentProfileName ? 'This name is saved to your account and is used for every assignment.' : 'Choose your name the first time you join an assignment. It will be saved for future assignments.';
             }
+            studentClassId = typeof profileData.studentClassId === 'string' && profileData.studentClassId.trim()
+              ? profileData.studentClassId.trim() : null;
+            if (profileData.role !== 'teacher') {
+              currentClassId = studentClassId || 'MB1';
+              selectedClassId = currentClassId;
+              try { localStorage.setItem(activeClassStorageKey(user.uid), currentClassId); } catch (_) {}
+            }
             accountRole = profileData.role === 'teacher' ? 'teacher' : 'student';
             if (accountRole === 'student') {
               const directoryName = studentProfileName
@@ -284,6 +291,8 @@
     let currentClassId = 'MB1';
     let selectedClassId = 'MB1';
     let pendingPortalRole = null;
+    // Once a student joins a session, their account is locked to that class.
+    let studentClassId = null;
 
     function activeClassStorageKey(uid = signedInUser?.uid) {
       return uid ? 'step_active_class_' + uid : null;
@@ -606,7 +615,16 @@
         currentClassId = state.classId || loadActiveClassId();
         selectedClassId = state.selectedClassId || currentClassId;
         if (state.screen === 'class-selection') {
-          pendingPortalRole = state.pendingRole || state.role || (accountRole === 'teacher' ? 'teacher' : 'student');
+          // Older sessions may have saved the student class picker before it was removed.
+          if (accountRole !== 'teacher') {
+            pendingPortalRole = null;
+            currentClassId = studentClassId || 'MB1';
+            selectedClassId = currentClassId;
+            document.getElementById('classSelectionScreen').classList.add('hidden');
+            roleSelectionScreen.classList.remove('hidden');
+            return true;
+          }
+          pendingPortalRole = 'teacher';
           roleSelectionScreen.classList.add('hidden');
           document.getElementById('classSelectionScreen').classList.remove('hidden');
           await loadClassRegistry();
@@ -775,7 +793,12 @@
     });
 
     document.getElementById('selectTeacherBtn').addEventListener('click', () => switchRole('teacher', { fromWelcome: true }));
-    document.getElementById('selectStudentBtn').addEventListener('click', () => switchRole('student', { fromWelcome: true }));
+    document.getElementById('selectStudentBtn').addEventListener('click', async () => {
+      // Student Portal never opens the class picker. Resume the locked class, or use MB1
+      // until the student joins their first session and gets a class lock.
+      setActiveClass(studentClassId || 'MB1');
+      await switchRole('student', { fromWelcome: true, skipClassSelection: true });
+    });
 
     document.getElementById('createClassBtn').addEventListener('click', createClassFromForm);
     document.getElementById('newClassName').addEventListener('keydown', event => {
@@ -2017,8 +2040,10 @@ async function loadAssignmentProgressCounts(assignment) {
         }
 
         const lookup = lookupDoc.data();
-        await loadClassRegistry();
-        setActiveClass(lookup.classId || 'MB1');
+        const sessionClassId = lookup.classId || 'MB1';
+        if (studentClassId && studentClassId !== sessionClassId) {
+          throw new Error('This account is assigned to class ' + getClassDisplayName(studentClassId) + ' and cannot join a session from another class. Ask your teacher to check your class assignment.');
+        }
         matchedDocId = lookup.assignmentId;
         if (!matchedDocId) throw new Error('This session code is not configured correctly.');
 
@@ -2034,10 +2059,14 @@ async function loadAssignmentProgressCounts(assignment) {
           const profileData = userSnapshot.exists ? userSnapshot.data() : {};
           const savedName = typeof profileData.studentName === 'string' ? profileData.studentName.trim() : '';
           const chosenName = savedName || name;
-
-          if (!savedName) {
-            transaction.set(userRef, { studentName: chosenName, studentNameSetAt: now }, { merge: true });
+          if (profileData.studentClassId && profileData.studentClassId !== sessionClassId) {
+            throw new Error('This account is already assigned to a different class. Ask your teacher to check your class assignment.');
           }
+          // Lock the account to its first joined session's class; later sessions must match.
+          transaction.set(userRef, {
+            studentClassId: sessionClassId,
+            ...(!savedName ? { studentName: chosenName, studentNameSetAt: now } : {})
+          }, { merge: true });
           // The directory stores only the student's chosen display name, not email or other profile data.
           transaction.set(peerRef, {
             studentName: chosenName,
@@ -2046,6 +2075,9 @@ async function loadAssignmentProgressCounts(assignment) {
           }, { merge: true });
           return chosenName;
         });
+        studentClassId = sessionClassId;
+        await loadClassRegistry();
+        setActiveClass(sessionClassId);
         name = canonicalName;
         studentProfileName = canonicalName;
         studentName = canonicalName;
@@ -2095,7 +2127,10 @@ async function loadAssignmentProgressCounts(assignment) {
         }
       } catch (err) {
         console.error('Could not join assignment:', err);
-        showToast('Could not join assignment: ' + err.message, 'error');
+        const message = err.code === 'permission-denied' && studentClassId
+          ? 'This account is assigned to a different class. Ask your teacher to check your class assignment.'
+          : err.message;
+        showToast('Could not join assignment: ' + message, 'error');
         joinBtn.disabled = false;
         joinBtn.innerHTML = '<span>Start Working</span> <i class="fa-solid fa-arrow-right"></i>';
         return;

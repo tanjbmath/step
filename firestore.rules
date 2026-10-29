@@ -60,6 +60,11 @@ service cloud.firestore {
 
       allow update: if isOwner(uid)
         && (
+          !('studentClassId' in resource.data)
+          || ('studentClassId' in request.resource.data
+            && request.resource.data.studentClassId == resource.data.studentClassId)
+        )
+        && (
           ('role' in resource.data
             && 'role' in request.resource.data
             && request.resource.data.role == resource.data.role)
@@ -76,7 +81,7 @@ service cloud.firestore {
         )
         && request.resource.data.keys().hasOnly([
           'displayName', 'email', 'photoURL', 'lastSignInAt', 'role',
-          'studentName', 'studentNameSetAt'
+          'studentName', 'studentNameSetAt', 'studentClassId'
         ]);
 
       allow delete: if false;
@@ -188,7 +193,14 @@ service cloud.firestore {
 
     // A known session code can resolve to a limited lookup record; codes cannot be listed.
     match /assignmentLookups/{code} {
-      allow get: if signedIn();
+      allow get: if signedIn() && (
+        isTeacher()
+        || !exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        || !('studentClassId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+        || resource.data.classId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId
+        || (!('classId' in resource.data)
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId == 'MB1')
+      );
       allow list: if false;
 
       allow create: if isTeacher()
@@ -493,6 +505,14 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode))
           && get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.assignmentId == assignmentId
           && exists(/databases/$(database)/documents/assignments/$(assignmentId))
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && ('studentClassId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+          && (
+            get(/databases/$(database)/documents/assignments/$(assignmentId)).data.classId
+              == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId
+            || (!('classId' in get(/databases/$(database)/documents/assignments/$(assignmentId)).data)
+              && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId == 'MB1')
+          )
           && (
             (
               exists(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode))
