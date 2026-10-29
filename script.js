@@ -114,8 +114,6 @@
               nameInput.readOnly = Boolean(studentProfileName);
               nameInput.title = studentProfileName ? 'This name is saved to your account and is used for every assignment.' : 'Choose your name the first time you join an assignment. It will be saved for future assignments.';
             }
-            studentClassId = typeof profileData.studentClassId === 'string' && profileData.studentClassId.trim()
-              ? profileData.studentClassId.trim() : null;
             if (profileData.role !== 'teacher') {
               await loadClassRegistry();
               const joinedClassIds = await getStudentJoinedClassIds(user.uid);
@@ -294,8 +292,6 @@
     let currentClassId = 'MB1';
     let selectedClassId = 'MB1';
     let pendingPortalRole = null;
-    // Once a student joins a session, their account is locked to that class.
-    let studentClassId = null;
 
     function activeClassStorageKey(uid = signedInUser?.uid) {
       return uid ? 'step_active_class_' + uid : null;
