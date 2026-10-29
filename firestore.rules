@@ -289,7 +289,7 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.status == 'in-progress'
           && (
             !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data)
-            || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired']
+            || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(request.auth.uid)).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired', 'cancelled']
           )
           && request.resource.data.keys().hasOnly([
             'requestId', 'question', 'requestMode', 'status', 'slideIndex', 'workKey', 'helperUid',
@@ -354,6 +354,11 @@ service cloud.firestore {
             && resource.data.status in ['pending', 'helping']
             && request.resource.data.status == 'expired'
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'expiredAt', 'updatedAt'])
+          ) || (
+            isHelpRequester(assignmentId, requestId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'cancelled'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'updatedAt'])
           );
 
         allow delete: if ownsAssignment(assignmentId)
@@ -419,6 +424,12 @@ service cloud.firestore {
             && resource.data.status in ['pending', 'helping']
             && request.resource.data.status == 'expired'
             && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'expired'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) || (
+            isHelpRequester(assignmentId, resource.data.requestId)
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'cancelled'
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(resource.data.requestId)).data.status == 'cancelled'
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
           );
 
@@ -500,7 +511,7 @@ service cloud.firestore {
                 'activeHelpLockKey' in request.resource.data
                 && (
                   request.resource.data.activeHelpLockKey == resource.data.activeHelpLockKey
-                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired', 'cancelled']
                 )
               )
             )
@@ -513,7 +524,7 @@ service cloud.firestore {
               // If the parent assignment has already been removed, allow cleanup of orphaned work.
               !exists(/databases/$(database)/documents/assignments/$(assignmentId))
               || !('activeHelpLockKey' in resource.data)
-              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired']
+              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired', 'cancelled']
             )
           );
 
