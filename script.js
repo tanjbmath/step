@@ -334,6 +334,184 @@
       renderClassManagementControls();
     }
 
+    async function createClassFromForm() {
+      if (classManagementBusy) return;
+      if (!signedInUser || !db || pendingPortalRole !== 'teacher' || accountRole !== 'teacher') {
+        showToast('Only an authenticated teacher can create a class.', 'error'); return;
+      }
+      const nameInput = document.getElementById('newClassName');
+      const descriptionInput = document.getElementById('newClassDescription');
+      const name = (nameInput?.value || '').trim();
+      const description = (descriptionInput?.value || '').trim();
+      if (!name) { showToast('Enter a class name first.', 'error'); nameInput?.focus(); return; }
+      if (name.length > 60 || description.length > 160) {
+        showToast('Class name must be 60 characters or fewer; description must be 160 characters or fewer.', 'error'); return;
+      }
+      if (STEP_CLASSES.some(item => item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+        showToast('A class with that name already exists.', 'error'); return;
+      }
+      classManagementBusy = true;
+      const createBtn = document.getElementById('createClassBtn');
+      if (createBtn) createBtn.disabled = true;
+      try {
+        const ref = db.collection('classes').doc();
+        await ref.set({
+          name, description: description || 'Class assignments and student work',
+          ownerTeacherId: signedInUser.uid,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(), deleted: false
+        });
+        nameInput.value = '';
+        descriptionInput.value = '';
+        await loadClassRegistry();
+        selectedClassId = ref.id;
+        renderClassChoices();
+        showToast('Class "' + name + '" created.', 'success');
+        saveStepScreenState();
+      } catch (err) {
+        console.error('Class creation failed:', err);
+        showToast('Could not create class: ' + err.message, 'error');
+      } finally {
+        classManagementBusy = false;
+        if (createBtn) createBtn.disabled = false;
+      }
+    }
+
+    async function deleteStoragePrefix(prefix) {
+      if (!storage) return;
+      const result = await storage.ref(prefix).listAll();
+      for (const item of result.items) {
+        await item.delete().catch(err => { if (err.code !== 'storage/object-not-found') throw err; });
+      }
+      for (const folder of result.prefixes) await deleteStoragePrefix(folder.fullPath);
+    }
+
+    async function deleteClassAssignmentData(assignmentId, assignment) {
+      if (assignment?.teacherId !== signedInUser?.uid) {
+        throw new Error('This account does not own assignment ' + assignmentId + '. The class was not fully deleted.');
+      }
+      const ref = db.collection('assignments').doc(assignmentId);
+      const students = await ref.collection('students').get();
+      for (const studentDoc of students.docs) {
+        const slides = await studentDoc.ref.collection('slides').get();
+        for (const slide of slides.docs) {
+          const path = slide.data()?.canvasStoragePath;
+          if (path && storage) await storage.ref(path).delete().catch(err => {
+            if (err.code !== 'storage/object-not-found') throw err;
+          });
+        }
+        for (let i = 0; i < slides.docs.length; i += 400) {
+          const batch = db.batch();
+          slides.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+        await studentDoc.ref.delete();
+        const userRef = db.collection('users').doc(studentDoc.id);
+        const submissionRef = userRef.collection('submissions').doc(assignmentId);
+        const submission = await submissionRef.get();
+        if (submission.exists) await submissionRef.delete();
+        const events = await userRef.collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get();
+        for (let i = 0; i < events.docs.length; i += 400) {
+          const batch = db.batch();
+          events.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+      }
+      const assigned = await ref.collection('assignedStudents').get();
+      for (let i = 0; i < assigned.docs.length; i += 400) {
+        const batch = db.batch();
+        assigned.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+      }
+      const requests = await ref.collection('helpRequests').get();
+      for (const request of requests.docs) {
+        const slides = await request.ref.collection('slides').get();
+        for (let i = 0; i < slides.docs.length; i += 400) {
+          const batch = db.batch();
+          slides.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+        await request.ref.delete();
+      }
+      for (const collectionName of ['helpRequestOwners', 'helpLocks']) {
+        const snapshot = await ref.collection(collectionName).get();
+        for (let i = 0; i < snapshot.docs.length; i += 400) {
+          const batch = db.batch();
+          snapshot.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+      }
+      if (assignment?.sessionCode) {
+        const lookupRef = db.collection('assignmentLookups').doc(assignment.sessionCode);
+        const lookup = await lookupRef.get();
+        if (lookup.exists) await lookupRef.delete();
+      }
+      await deleteStoragePrefix('student-work/' + assignmentId);
+      await ref.delete();
+    }
+
+    async function deleteClassFromSelection(classId) {
+      if (classManagementBusy) return;
+      if (!signedInUser || !db || pendingPortalRole !== 'teacher' || accountRole !== 'teacher') {
+        showToast('Only an authenticated teacher can delete a class.', 'error'); return;
+      }
+      const target = STEP_CLASSES.find(item => item.id === classId);
+      if (!target) { showToast('Class not found. Refresh the class list and try again.', 'error'); return; }
+      if (target.ownerTeacherId && target.ownerTeacherId !== signedInUser.uid) {
+        showToast('Only the teacher who created this class can delete it.', 'error'); return;
+      }
+      const typed = window.prompt(
+        'PERMANENT DELETION\n\nThis will delete class "' + target.name +
+        '", all its assignments, student canvases, submitted work, help requests, and saved files. This cannot be undone.\n\nTo confirm, type DELETE in capital letters:'
+      );
+      if (typed !== 'DELETE') {
+        showToast('Class deletion cancelled. No data was deleted.', 'info'); return;
+      }
+      if (!window.confirm('Final confirmation: permanently delete ALL data belonging to class "' + target.name + '"?')) return;
+      classManagementBusy = true;
+      try {
+        const snapshot = await db.collection('assignments').where('teacherId', '==', signedInUser.uid).get();
+        const assignments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(item => (item.classId || 'MB1') === classId);
+        for (const assignment of assignments) await deleteClassAssignmentData(assignment.id, assignment);
+
+        const classRef = db.collection('classes').doc(classId);
+        const classDoc = await classRef.get();
+        if (classDoc.exists) {
+          const data = classDoc.data() || {};
+          if (data.ownerTeacherId && data.ownerTeacherId !== signedInUser.uid) {
+            throw new Error('Only the class creator can delete this class.');
+          }
+          await classRef.set({
+            name: data.name || target.name,
+            description: data.description || target.description || '',
+            ownerTeacherId: data.ownerTeacherId || signedInUser.uid,
+            deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        } else if (classId === 'MB1') {
+          await classRef.set({
+            name: 'MB1', description: 'Built-in class', ownerTeacherId: signedInUser.uid,
+            deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+        STEP_CLASSES = STEP_CLASSES.filter(item => item.id !== classId);
+        if (currentClassId === classId) currentClassId = STEP_CLASSES[0]?.id || 'MB1';
+        if (selectedClassId === classId) selectedClassId = STEP_CLASSES[0]?.id || 'MB1';
+        try { const key = activeClassStorageKey(); if (key) localStorage.setItem(key, currentClassId); } catch (_) {}
+        await loadClassRegistry();
+        renderClassChoices();
+        saveStepScreenState();
+        showToast('Class "' + target.name + '" and its class-owned data were deleted.', 'success');
+      } catch (err) {
+        console.error('Class deletion failed:', err);
+        showToast('Class deletion stopped before completion: ' + err.message + '. Some records may already have been deleted; inspect Firebase before retrying.', 'error');
+        await loadClassRegistry();
+        renderClassChoices();
+      } finally {
+        classManagementBusy = false;
+        renderClassChoices();
+      }
+    }
+
     let studentId = null;
     let studentName = null;
     let inspectingStudentId = null;
