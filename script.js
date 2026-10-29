@@ -233,6 +233,8 @@
     let studentId = null;
     let studentName = null;
     let inspectingStudentId = null;
+    // Preserve the teacher dashboard's position while temporarily inspecting student work.
+    let teacherDashboardScrollY = 0;
 
     // Teacher-controlled help feature. Peer Help is opt-in; missing flags default to disabled.
     function isPeerHelpEnabled() { return currentAssignmentData?.peerHelpEnabled === true; }
@@ -1344,6 +1346,8 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function openWorkspaceForInspection(stId, stName, status = 'submitted', studentRecord = null) {
+      // Remember where the teacher was on the dashboard so Back to Dashboard restores that view.
+      teacherDashboardScrollY = window.scrollY || document.documentElement.scrollTop || 0;
       // Live roster previews are unnecessary while inspecting one student's full canvas.
       stopStudentPreviewListeners();
       inspectingStudentId = stId;
@@ -1746,6 +1750,8 @@ async function loadAssignmentProgressCounts(assignment) {
       if (inspectingStudentId) {
         teacherDashboard.classList.remove('hidden');
         inspectingStudentId = null;
+        // Restore the dashboard at its previous scroll position; do not reload/reset its active view.
+        requestAnimationFrame(() => window.scrollTo(0, teacherDashboardScrollY));
       } else if (currentUserRole === 'student') {
         studentHistoryScreen.classList.remove('hidden');
         document.getElementById('exitWorkspaceBtn').textContent = 'Back to Dashboard';
