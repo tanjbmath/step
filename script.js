@@ -1829,7 +1829,7 @@ async function loadAssignmentProgressCounts(assignment) {
             description: matchedData.description || '', sessionCode: inputCode, status: currentSubmissionStatus,
             startedAt: now, lastWorkedAt: now, slideCount: (matchedData.slides || []).length });
         } else if (currentSubmissionStatus !== 'completed') {
-          await submissionRef.set({ assignmentId: matchedDocId, title: matchedData.title || lookup.title || 'Assignment',
+          await submissionRef.set({ assignmentId: matchedDocId, classId: matchedData.classId || currentClassId, title: matchedData.title || lookup.title || 'Assignment',
             description: matchedData.description || '', sessionCode: inputCode, status: currentSubmissionStatus,
             lastWorkedAt: now, slideCount: (matchedData.slides || []).length }, { merge: true });
         }
