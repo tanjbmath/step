@@ -129,6 +129,33 @@ service cloud.firestore {
         allow delete: if isTeacher() && ownsAssignment(resource.data.assignmentId);
       }
 
+      match /classes/{classId} {
+        allow read: if isOwner(uid);
+
+        function membershipAssignmentMatchesClass() {
+          return request.resource.data.assignmentId is string
+            && exists(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId))
+            && exists(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/students/$(uid))
+            && (
+              get(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)).data.classId == classId
+              || (!('classId' in get(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)).data) && classId == 'MB1')
+            );
+        }
+
+        allow create: if isOwner(uid)
+          && request.resource.data.keys().hasOnly(['classId', 'assignmentId', 'joinedAt'])
+          && request.resource.data.classId == classId
+          && membershipAssignmentMatchesClass();
+
+        allow update: if isOwner(uid)
+          && request.resource.data.keys().hasOnly(['classId', 'assignmentId', 'joinedAt'])
+          && request.resource.data.classId == classId
+          && resource.data.classId == classId
+          && membershipAssignmentMatchesClass();
+
+        allow delete: if false;
+      }
+
       match /submissions/{assignmentId} {
         allow read: if isOwner(uid);
         allow create: if isOwner(uid)
@@ -193,14 +220,9 @@ service cloud.firestore {
 
     // A known session code can resolve to a limited lookup record; codes cannot be listed.
     match /assignmentLookups/{code} {
-      allow get: if signedIn() && (
-        isTeacher()
-        || !exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        || !('studentClassId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
-        || resource.data.classId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId
-        || (!('classId' in resource.data)
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId == 'MB1')
-      );
+      // The lookup reveals only minimal join metadata. Assignment content remains protected
+      // by the assignment membership rules, and a valid join code can add another class.
+      allow get: if signedIn();
       allow list: if false;
 
       allow create: if isTeacher()
@@ -506,12 +528,11 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.assignmentId == assignmentId
           && exists(/databases/$(database)/documents/assignments/$(assignmentId))
           && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-          && ('studentClassId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
           && (
             get(/databases/$(database)/documents/assignments/$(assignmentId)).data.classId
-              == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId
+              == get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.classId
             || (!('classId' in get(/databases/$(database)/documents/assignments/$(assignmentId)).data)
-              && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentClassId == 'MB1')
+              && get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.classId == 'MB1')
           )
           && (
             (
