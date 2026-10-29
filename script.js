@@ -118,7 +118,9 @@
               await loadClassRegistry();
               const joinedClassIds = await getStudentJoinedClassIds(user.uid);
               const storedClassId = loadActiveClassId(user.uid);
-              currentClassId = joinedClassIds.includes(storedClassId) ? storedClassId : (joinedClassIds[0] || 'MB1');
+              const availableJoinedClassIds = joinedClassIds.filter(id => STEP_CLASSES.some(item => item.id === id));
+              currentClassId = availableJoinedClassIds.includes(storedClassId)
+                ? storedClassId : (availableJoinedClassIds[0] || 'MB1');
               selectedClassId = currentClassId;
               try { localStorage.setItem(activeClassStorageKey(user.uid), currentClassId); } catch (_) {}
             }
