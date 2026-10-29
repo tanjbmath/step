@@ -116,6 +116,24 @@
             }
             studentClassId = typeof profileData.studentClassId === 'string' && profileData.studentClassId.trim()
               ? profileData.studentClassId.trim() : null;
+            // Migrate existing students by locking them to the class of their most recently
+            // worked assignment, rather than trusting a stale class ID in browser storage.
+            if (!studentClassId && profileData.role !== 'teacher') {
+              try {
+                const priorWork = await userRef.collection('submissions').get();
+                const records = priorWork.docs.map(doc => ({ ...doc.data(), classId: doc.data().classId || 'MB1' }));
+                const timeOf = value => value?.toDate ? value.toDate().getTime()
+                  : (typeof value === 'string' ? (Date.parse(value) || 0) : 0);
+                records.sort((a, b) => Math.max(timeOf(b.lastWorkedAt), timeOf(b.startedAt), timeOf(b.submittedAt))
+                  - Math.max(timeOf(a.lastWorkedAt), timeOf(a.startedAt), timeOf(a.submittedAt)));
+                if (records.length) {
+                  studentClassId = records[0].classId;
+                  await userRef.set({ studentClassId }, { merge: true });
+                }
+              } catch (migrationError) {
+                console.warn('Could not migrate the existing student class:', migrationError);
+              }
+            }
             if (profileData.role !== 'teacher') {
               currentClassId = studentClassId || 'MB1';
               selectedClassId = currentClassId;
