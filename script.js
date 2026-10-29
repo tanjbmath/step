@@ -298,6 +298,23 @@
     function isCurrentClass(record) {
       return (record?.classId || 'MB1') === currentClassId;
     }
+
+    function getClassDisplayName(classId = currentClassId) {
+      return STEP_CLASSES.find(item => item.id === classId)?.name || (classId === 'MB1' ? 'MB1' : 'Class');
+    }
+
+    function setActiveClass(classId) {
+      currentClassId = classId || 'MB1';
+      selectedClassId = currentClassId;
+      try {
+        if (signedInUser) localStorage.setItem(activeClassStorageKey(), currentClassId);
+      } catch (err) { console.warn('Could not save active class:', err); }
+      const badge = document.getElementById('activeClassBadge');
+      if (badge) {
+        badge.textContent = 'Class: ' + getClassDisplayName(currentClassId);
+        badge.classList.remove('hidden');
+      }
+    }
     function renderClassChoices() {
       const container = document.getElementById('classOptionsContainer');
       if (!container) return;
@@ -917,7 +934,7 @@
         }
       }
 
-      if (options.fromWelcome && options.skipClassSelection !== true) {
+      if (options.fromWelcome && options.skipClassSelection !== true && role === 'teacher') {
         pendingPortalRole = role;
         selectedClassId = currentClassId;
         roleSelectionScreen.classList.add('hidden');
@@ -929,11 +946,12 @@
         return;
       }
 
+      await loadClassRegistry();
       currentUserRole = role;
       pendingPortalRole = null;
       const activeClassBadge = document.getElementById('activeClassBadge');
       if (activeClassBadge) {
-        activeClassBadge.textContent = 'Class: ' + currentClassId;
+        activeClassBadge.textContent = 'Class: ' + getClassDisplayName(currentClassId);
         activeClassBadge.classList.remove('hidden');
       }
       document.getElementById('classSelectionScreen').classList.add('hidden');
@@ -1910,10 +1928,8 @@ async function loadAssignmentProgressCounts(assignment) {
       const lookupDoc = await db.collection('assignmentLookups').doc(inputCode).get();
       if (!lookupDoc.exists) return false;
       const lookup = lookupDoc.data() || {};
-      if ((lookup.classId || 'MB1') !== currentClassId) {
-        showToast('This assignment belongs to class ' + (lookup.classId || 'MB1') + '. Switch to that class before opening it.', 'error');
-        return true;
-      }
+      await loadClassRegistry();
+      setActiveClass(lookup.classId || 'MB1');
       const assignmentId = lookup.assignmentId;
       if (!assignmentId) return false;
 
@@ -2001,9 +2017,8 @@ async function loadAssignmentProgressCounts(assignment) {
         }
 
         const lookup = lookupDoc.data();
-        if ((lookup.classId || 'MB1') !== currentClassId) {
-          throw new Error('This session code belongs to class ' + (lookup.classId || 'MB1') + '. Select that class before joining.');
-        }
+        await loadClassRegistry();
+        setActiveClass(lookup.classId || 'MB1');
         matchedDocId = lookup.assignmentId;
         if (!matchedDocId) throw new Error('This session code is not configured correctly.');
 
