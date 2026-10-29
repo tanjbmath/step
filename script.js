@@ -1221,8 +1221,27 @@ async function loadAssignmentProgressCounts(assignment) {
             ${student.status === 'submitted' ? '<button type="button" class="mark-completed-btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">Completed</button><button type="button" class="amendments-btn bg-amber-500 hover:bg-amber-600 text-white text-xs px-3 py-2 rounded-lg font-semibold">Amendments Needed</button>' : ''}
             ${student.isJoined && ['assignment-started', 'in-progress'].includes(String(student.status || '').trim().toLowerCase()) ? '<button type="button" class="force-completed-btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-semibold">Complete Assignment</button>' : ''}
           </div>`;
+        // Open a joined student's canvas when any non-action area of their card is clicked.
+        // Keep action buttons independent so review/status controls never trigger navigation.
+        card.classList.add('cursor-pointer');
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        card.setAttribute('aria-label', `View work for ${displayName}`);
+        const openThisStudentWork = () => {
+          if (student.isJoined) openWorkspaceForInspection(student.studentUid || student.id, displayName, student.status, student);
+        };
+        card.addEventListener('click', event => {
+          if (event.target.closest('button, a, input, select, textarea, label')) return;
+          openThisStudentWork();
+        });
+        card.addEventListener('keydown', event => {
+          if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('button, a, input, select, textarea, label')) {
+            event.preventDefault();
+            openThisStudentWork();
+          }
+        });
         const inspect = card.querySelector('.inspect-student-btn');
-        if (inspect) inspect.addEventListener('click', e => { e.stopPropagation(); openWorkspaceForInspection(student.studentUid || student.id, displayName, student.status, student); });
+        if (inspect) inspect.addEventListener('click', e => { e.stopPropagation(); openThisStudentWork(); });
         const completed = card.querySelector('.mark-completed-btn');
         if (completed) completed.addEventListener('click', e => { e.stopPropagation(); setStudentReviewStatus(student, 'completed'); });
         const amendments = card.querySelector('.amendments-btn');
@@ -1733,7 +1752,8 @@ async function loadAssignmentProgressCounts(assignment) {
       } else {
         teacherDashboard.classList.remove('hidden');
       }
-      if (currentUserRole === 'teacher' && currentAssignmentId) loadTeacherAssignmentView(currentAssignmentId);
+      // Keep the teacher's existing dashboard/assignment view in place. Reloading it here
+      // resets the view and causes avoidable Firestore reads.
     });
 
     // ==========================================
