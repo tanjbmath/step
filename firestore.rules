@@ -193,7 +193,7 @@ service cloud.firestore {
       allow create: if isTeacher()
         && request.resource.data.sessionCode == code
         && request.resource.data.keys().hasOnly([
-          'assignmentId', 'sessionCode', 'teacherId', 'title', 'status', 'createdAt'
+          'assignmentId', 'sessionCode', 'classId', 'teacherId', 'title', 'status', 'createdAt'
         ])
         && request.resource.data.teacherId == request.auth.uid
         && exists(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId))
@@ -207,7 +207,7 @@ service cloud.firestore {
         && request.resource.data.assignmentId == resource.data.assignmentId
         && request.resource.data.teacherId == resource.data.teacherId
         && request.resource.data.keys().hasOnly([
-          'assignmentId', 'sessionCode', 'teacherId', 'title', 'status', 'createdAt'
+          'assignmentId', 'sessionCode', 'classId', 'teacherId', 'title', 'status', 'createdAt'
         ]);
 
       allow delete: if isTeacher()
