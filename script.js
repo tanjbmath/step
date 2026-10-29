@@ -646,20 +646,12 @@
         currentClassId = state.classId || loadActiveClassId();
         selectedClassId = state.selectedClassId || currentClassId;
         if (state.screen === 'class-selection') {
-          // Older sessions may have saved the student class picker before it was removed.
-          if (accountRole !== 'teacher') {
-            pendingPortalRole = null;
-            currentClassId = currentClassId || 'MB1';
-            selectedClassId = currentClassId;
-            document.getElementById('classSelectionScreen').classList.add('hidden');
-            roleSelectionScreen.classList.remove('hidden');
-            return true;
-          }
-          pendingPortalRole = 'teacher';
+          pendingPortalRole = state.pendingRole || state.role || (accountRole === 'teacher' ? 'teacher' : 'student');
+          if (pendingPortalRole === 'teacher' && accountRole !== 'teacher') pendingPortalRole = 'student';
           roleSelectionScreen.classList.add('hidden');
           document.getElementById('classSelectionScreen').classList.remove('hidden');
           await loadClassRegistry();
-          renderClassChoices();
+          await renderClassChoices();
           return true;
         }
         if (state.screen === 'workspace' && state.role === 'teacher' && state.studentId && state.assignmentId) {
