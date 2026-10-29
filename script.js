@@ -243,9 +243,44 @@
 
     // Legacy records without classId are assigned to MB1.
     // Add future classes here; all new assignment/submission records carry this ID.
-    const STEP_CLASSES = [
-      { id: 'MB1', name: 'MB1', description: 'Current class and existing saved work' }
+    const STEP_DEFAULT_CLASSES = [
+      { id: 'MB1', name: 'MB1', description: 'Current class and existing saved work', builtIn: true }
     ];
+    let STEP_CLASSES = [...STEP_DEFAULT_CLASSES];
+    let classManagementBusy = false;
+
+    async function loadClassRegistry() {
+      if (!signedInUser || !db) return;
+      try {
+        const snapshot = await db.collection('classes').get();
+        const byId = new Map(STEP_DEFAULT_CLASSES.map(item => [item.id, item]));
+        snapshot.docs.forEach(doc => {
+          const data = doc.data() || {};
+          if (data.deleted === true) { byId.delete(doc.id); return; }
+          if (typeof data.name === 'string' && data.name.trim()) {
+            byId.set(doc.id, {
+              id: doc.id, name: data.name.trim(),
+              description: data.description || 'Class assignments and student work',
+              ownerTeacherId: data.ownerTeacherId || null, builtIn: doc.id === 'MB1'
+            });
+          }
+        });
+        STEP_CLASSES = [...byId.values()].sort((a, b) =>
+          a.id === 'MB1' ? -1 : b.id === 'MB1' ? 1 : a.name.localeCompare(b.name));
+        if (!STEP_CLASSES.some(item => item.id === currentClassId)) {
+          currentClassId = STEP_CLASSES[0]?.id || 'MB1';
+        }
+        if (!STEP_CLASSES.some(item => item.id === selectedClassId)) {
+          selectedClassId = currentClassId;
+        }
+      } catch (err) { console.error('Could not load class registry:', err); }
+    }
+
+    function renderClassManagementControls() {
+      const controls = document.getElementById('classManagementControls');
+      if (controls) controls.classList.toggle('hidden',
+        !(pendingPortalRole === 'teacher' && accountRole === 'teacher'));
+    }
     let currentClassId = 'MB1';
     let selectedClassId = 'MB1';
     let pendingPortalRole = null;
@@ -267,27 +302,230 @@
       const container = document.getElementById('classOptionsContainer');
       if (!container) return;
       container.innerHTML = '';
-      STEP_CLASSES.forEach(item => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.setAttribute('aria-pressed', String(selectedClassId === item.id));
-        button.className = 'p-5 rounded-2xl border-2 text-left transition ' +
+      const visibleClasses = pendingPortalRole === 'teacher'
+        ? STEP_CLASSES.filter(item => !item.ownerTeacherId || item.ownerTeacherId === signedInUser?.uid)
+        : STEP_CLASSES;
+      visibleClasses.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'rounded-2xl border-2 p-3 transition ' +
           (selectedClassId === item.id
             ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-100'
-            : 'border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50');
-        button.innerHTML = '<div class="flex items-start justify-between gap-3"><div><div class="class-option-name text-xl font-extrabold text-slate-800"></div><p class="text-sm text-slate-500 mt-2"></p></div><span class="class-selected-indicator w-7 h-7 rounded-full flex items-center justify-center"></span></div>';
-        button.querySelector('.class-option-name').textContent = item.name;
-        button.querySelector('p').textContent = item.description;
-        const indicator = button.querySelector('.class-selected-indicator');
+            : 'border-slate-200 bg-white hover:border-indigo-300');
+        const selectButton = document.createElement('button');
+        selectButton.type = 'button';
+        selectButton.setAttribute('aria-pressed', String(selectedClassId === item.id));
+        selectButton.className = 'w-full rounded-xl p-2 text-left';
+        selectButton.innerHTML = '<div class="flex items-start justify-between gap-3"><div><div class="class-option-name text-xl font-extrabold text-slate-800"></div><p class="class-option-description text-sm text-slate-500 mt-2"></p></div><span class="class-selected-indicator w-7 h-7 rounded-full flex items-center justify-center"></span></div>';
+        selectButton.querySelector('.class-option-name').textContent = item.name;
+        selectButton.querySelector('.class-option-description').textContent = item.description;
+        const indicator = selectButton.querySelector('.class-selected-indicator');
         indicator.className += selectedClassId === item.id ? ' bg-indigo-600 text-white' : ' bg-slate-100 text-slate-400';
         indicator.innerHTML = selectedClassId === item.id ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-circle"></i>';
-        button.addEventListener('click', () => {
+        selectButton.addEventListener('click', () => {
           selectedClassId = item.id;
           renderClassChoices();
           saveStepScreenState();
         });
-        container.appendChild(button);
+        card.appendChild(selectButton);
+        if (pendingPortalRole === 'teacher' && accountRole === 'teacher') {
+          const canDelete = !item.ownerTeacherId || item.ownerTeacherId === signedInUser?.uid;
+          const deleteButton = document.createElement('button');
+          deleteButton.type = 'button';
+          deleteButton.dataset.deleteClass = item.id;
+          deleteButton.className = 'mt-3 w-full rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50';
+          deleteButton.textContent = canDelete ? 'Delete Class' : 'Created by another teacher';
+          deleteButton.disabled = !canDelete || classManagementBusy;
+          deleteButton.addEventListener('click', () => deleteClassFromSelection(item.id));
+          card.appendChild(deleteButton);
+        }
+        container.appendChild(card);
       });
+      renderClassManagementControls();
+    }
+
+    async function createClassFromForm() {
+      if (classManagementBusy) return;
+      if (!signedInUser || !db || pendingPortalRole !== 'teacher' || accountRole !== 'teacher') {
+        showToast('Only an authenticated teacher can create a class.', 'error'); return;
+      }
+      const nameInput = document.getElementById('newClassName');
+      const descriptionInput = document.getElementById('newClassDescription');
+      const name = (nameInput?.value || '').trim();
+      const description = (descriptionInput?.value || '').trim();
+      if (!name) { showToast('Enter a class name first.', 'error'); nameInput?.focus(); return; }
+      if (name.length > 60 || description.length > 160) {
+        showToast('Class name must be 60 characters or fewer; description must be 160 characters or fewer.', 'error'); return;
+      }
+      if (STEP_CLASSES.some(item => item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+        showToast('A class with that name already exists.', 'error'); return;
+      }
+      classManagementBusy = true;
+      const createBtn = document.getElementById('createClassBtn');
+      if (createBtn) createBtn.disabled = true;
+      try {
+        const ref = db.collection('classes').doc();
+        await ref.set({
+          name, description: description || 'Class assignments and student work',
+          ownerTeacherId: signedInUser.uid,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(), deleted: false
+        });
+        nameInput.value = '';
+        descriptionInput.value = '';
+        await loadClassRegistry();
+        selectedClassId = ref.id;
+        renderClassChoices();
+        showToast('Class "' + name + '" created.', 'success');
+        saveStepScreenState();
+      } catch (err) {
+        console.error('Class creation failed:', err);
+        showToast('Could not create class: ' + err.message, 'error');
+      } finally {
+        classManagementBusy = false;
+        if (createBtn) createBtn.disabled = false;
+      }
+    }
+
+    async function deleteStoragePrefix(prefix) {
+      if (!storage) return;
+      const result = await storage.ref(prefix).listAll();
+      for (const item of result.items) {
+        await item.delete().catch(err => { if (err.code !== 'storage/object-not-found') throw err; });
+      }
+      for (const folder of result.prefixes) await deleteStoragePrefix(folder.fullPath);
+    }
+
+    async function deleteClassAssignmentData(assignmentId, assignment) {
+      if (assignment?.teacherId !== signedInUser?.uid) {
+        throw new Error('This account does not own assignment ' + assignmentId + '. The class was not fully deleted.');
+      }
+      const ref = db.collection('assignments').doc(assignmentId);
+      const students = await ref.collection('students').get();
+      for (const studentDoc of students.docs) {
+        const slides = await studentDoc.ref.collection('slides').get();
+        for (const slide of slides.docs) {
+          const path = slide.data()?.canvasStoragePath;
+          if (path && storage) await storage.ref(path).delete().catch(err => {
+            if (err.code !== 'storage/object-not-found') throw err;
+          });
+        }
+        for (let i = 0; i < slides.docs.length; i += 400) {
+          const batch = db.batch();
+          slides.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+        await studentDoc.ref.delete();
+        const userRef = db.collection('users').doc(studentDoc.id);
+        const submissionRef = userRef.collection('submissions').doc(assignmentId);
+        const submission = await submissionRef.get();
+        if (submission.exists) await submissionRef.delete();
+        const events = await userRef.collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get();
+        for (let i = 0; i < events.docs.length; i += 400) {
+          const batch = db.batch();
+          events.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+      }
+      const teacherEvents = await db.collection('users').doc(signedInUser.uid)
+        .collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get();
+      for (let i = 0; i < teacherEvents.docs.length; i += 400) {
+        const batch = db.batch();
+        teacherEvents.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+      }
+      const assigned = await ref.collection('assignedStudents').get();
+      for (let i = 0; i < assigned.docs.length; i += 400) {
+        const batch = db.batch();
+        assigned.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+      }
+      const requests = await ref.collection('helpRequests').get();
+      for (const request of requests.docs) {
+        const slides = await request.ref.collection('slides').get();
+        for (let i = 0; i < slides.docs.length; i += 400) {
+          const batch = db.batch();
+          slides.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+        await request.ref.delete();
+      }
+      for (const collectionName of ['helpRequestOwners', 'helpLocks']) {
+        const snapshot = await ref.collection(collectionName).get();
+        for (let i = 0; i < snapshot.docs.length; i += 400) {
+          const batch = db.batch();
+          snapshot.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+      }
+      if (assignment?.sessionCode) {
+        const lookupRef = db.collection('assignmentLookups').doc(assignment.sessionCode);
+        const lookup = await lookupRef.get();
+        if (lookup.exists) await lookupRef.delete();
+      }
+      await deleteStoragePrefix('student-work/' + assignmentId);
+      await ref.delete();
+    }
+
+    async function deleteClassFromSelection(classId) {
+      if (classManagementBusy) return;
+      if (!signedInUser || !db || pendingPortalRole !== 'teacher' || accountRole !== 'teacher') {
+        showToast('Only an authenticated teacher can delete a class.', 'error'); return;
+      }
+      const target = STEP_CLASSES.find(item => item.id === classId);
+      if (!target) { showToast('Class not found. Refresh the class list and try again.', 'error'); return; }
+      if (target.ownerTeacherId && target.ownerTeacherId !== signedInUser.uid) {
+        showToast('Only the teacher who created this class can delete it.', 'error'); return;
+      }
+      const typed = window.prompt(
+        'PERMANENT DELETION\n\nThis will delete class "' + target.name +
+        '", all its assignments, student canvases, submitted work, help requests, and saved files. This cannot be undone.\n\nTo confirm, type DELETE in capital letters:'
+      );
+      if (typed !== 'DELETE') {
+        showToast('Class deletion cancelled. No data was deleted.', 'info'); return;
+      }
+      if (!window.confirm('Final confirmation: permanently delete ALL data belonging to class "' + target.name + '"?')) return;
+      classManagementBusy = true;
+      try {
+        const snapshot = await db.collection('assignments').where('teacherId', '==', signedInUser.uid).get();
+        const assignments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(item => (item.classId || 'MB1') === classId);
+        for (const assignment of assignments) await deleteClassAssignmentData(assignment.id, assignment);
+
+        const classRef = db.collection('classes').doc(classId);
+        const classDoc = await classRef.get();
+        if (classDoc.exists) {
+          const data = classDoc.data() || {};
+          if (data.ownerTeacherId && data.ownerTeacherId !== signedInUser.uid) {
+            throw new Error('Only the class creator can delete this class.');
+          }
+          await classRef.set({
+            name: data.name || target.name,
+            description: data.description || target.description || '',
+            ownerTeacherId: data.ownerTeacherId || signedInUser.uid,
+            deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        } else if (classId === 'MB1') {
+          await classRef.set({
+            name: 'MB1', description: 'Built-in class', ownerTeacherId: signedInUser.uid,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(), deleted: true
+          });
+        }
+        STEP_CLASSES = STEP_CLASSES.filter(item => item.id !== classId);
+        if (currentClassId === classId) currentClassId = STEP_CLASSES[0]?.id || 'MB1';
+        if (selectedClassId === classId) selectedClassId = STEP_CLASSES[0]?.id || 'MB1';
+        try { const key = activeClassStorageKey(); if (key) localStorage.setItem(key, currentClassId); } catch (_) {}
+        await loadClassRegistry();
+        renderClassChoices();
+        saveStepScreenState();
+        showToast('Class "' + target.name + '" and its class-owned data were deleted.', 'success');
+      } catch (err) {
+        console.error('Class deletion failed:', err);
+        showToast('Class deletion stopped before completion: ' + err.message + '. Some records may already have been deleted; inspect Firebase before retrying.', 'error');
+        await loadClassRegistry();
+        renderClassChoices();
+      } finally {
+        classManagementBusy = false;
+        renderClassChoices();
+      }
     }
 
     let studentId = null;
@@ -354,6 +592,7 @@
           pendingPortalRole = state.pendingRole || state.role || (accountRole === 'teacher' ? 'teacher' : 'student');
           roleSelectionScreen.classList.add('hidden');
           document.getElementById('classSelectionScreen').classList.remove('hidden');
+          await loadClassRegistry();
           renderClassChoices();
           return true;
         }
@@ -521,6 +760,11 @@
     document.getElementById('selectTeacherBtn').addEventListener('click', () => switchRole('teacher', { fromWelcome: true }));
     document.getElementById('selectStudentBtn').addEventListener('click', () => switchRole('student', { fromWelcome: true }));
 
+    document.getElementById('createClassBtn').addEventListener('click', createClassFromForm);
+    document.getElementById('newClassName').addEventListener('keydown', event => {
+      if (event.key === 'Enter') createClassFromForm();
+    });
+
     document.getElementById('backToWelcomeFromClassBtn').addEventListener('click', () => {
       pendingPortalRole = null;
       document.getElementById('classSelectionScreen').classList.add('hidden');
@@ -679,6 +923,7 @@
         roleSelectionScreen.classList.add('hidden');
         document.getElementById('classSelectionScreen').classList.remove('hidden');
         resetRoleBtn.classList.add('hidden');
+        await loadClassRegistry();
         renderClassChoices();
         saveStepScreenState();
         return;

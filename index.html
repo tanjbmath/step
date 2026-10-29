@@ -133,6 +133,20 @@
         <p class="text-slate-500 mt-2">Choose the class whose assignments and student work you want to access.</p>
       </div>
       <div id="classOptionsContainer" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+      <div id="classManagementControls" class="hidden mt-6 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 sm:p-5">
+        <h3 class="text-lg font-bold text-slate-800"><i class="fa-solid fa-layer-group mr-2 text-indigo-600"></i>Manage Classes</h3>
+        <p class="text-sm text-slate-600 mt-1 mb-4">Create a separate class for another student group. Deleting a class permanently removes its assignments and student work.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="block text-sm font-medium text-slate-700">Class name
+            <input id="newClassName" maxlength="60" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="e.g. MB2" autocomplete="off">
+          </label>
+          <label class="block text-sm font-medium text-slate-700">Description (optional)
+            <input id="newClassDescription" maxlength="160" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="e.g. Tuesday group" autocomplete="off">
+          </label>
+        </div>
+        <button id="createClassBtn" type="button" class="mt-3 rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-700"><i class="fa-solid fa-plus mr-2"></i>Create Class</button>
+        <p class="text-xs text-slate-500 mt-3">Select a class card and use Delete Class. You must type DELETE and confirm again.</p>
+      </div>
       <div class="mt-7 flex flex-col-reverse sm:flex-row justify-between gap-3">
         <button id="backToWelcomeFromClassBtn" type="button" class="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 font-semibold"><i class="fa-solid fa-arrow-left mr-2"></i>Back</button>
         <button id="continueWithClassBtn" type="button" class="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm">Continue to Portal <i class="fa-solid fa-arrow-right ml-2"></i></button>
