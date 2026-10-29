@@ -1667,10 +1667,19 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('teacherMarkCompletedBtn').addEventListener('click', async () => {
       const record = window.currentInspectedStudentRecord;
       if (!record) return;
-      await setStudentReviewStatus(record, 'completed');
-      currentSubmissionStatus = 'completed';
-      document.getElementById('teacherReviewActions').classList.add('hidden');
-      document.getElementById('workspaceSubtext').textContent = "Completed • Teacher annotations remain visible to the student";
+      try {
+        // Teacher annotations may have created a fresh Firestore canvas image after submission.
+        // Archive that final reviewed version too, before marking the work completed.
+        await flushCanvasSaveToFirestore();
+        await archiveStudentCanvasToStorage(currentAssignmentId, record.studentUid || inspectingStudentId);
+        await setStudentReviewStatus(record, 'completed');
+        currentSubmissionStatus = 'completed';
+        document.getElementById('teacherReviewActions').classList.add('hidden');
+        document.getElementById('workspaceSubtext').textContent = "Completed • Teacher annotations remain visible to the student";
+      } catch (err) {
+        console.error('Could not archive reviewed canvas:', err);
+        showToast('Could not archive the reviewed canvas. The work has not been marked completed.', 'error');
+      }
     });
 
     document.getElementById('teacherRequestAmendmentsBtn').addEventListener('click', async () => {
