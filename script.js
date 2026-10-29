@@ -1747,6 +1747,10 @@ async function loadAssignmentProgressCounts(assignment) {
         }
         currentSubmissionStatus = 'submitted';
         updateSubmitAssignmentButton();
+        // Keep navigation available after submission; students return to My Past Work.
+        const exitButton = document.getElementById('exitWorkspaceBtn');
+        exitButton.classList.remove('hidden');
+        exitButton.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back to Dashboard';
         renderCombinedStudentHistory();
         showToast('Assignment submitted to your teacher for review.', 'success');
       } catch (err) {
@@ -1777,7 +1781,7 @@ async function loadAssignmentProgressCounts(assignment) {
         roleSelectionScreen.classList.add('hidden');
         workspaceScreen.classList.remove('hidden');
         document.getElementById('exitWorkspaceBtn').classList.remove('hidden');
-        document.getElementById('exitWorkspaceBtn').textContent = 'Back to My Work';
+        document.getElementById('exitWorkspaceBtn').innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back to Dashboard';
         document.getElementById('workspaceTitle').textContent = currentAssignmentData.title || 'Assignment';
         document.getElementById('workspaceSubtext').textContent = currentSubmissionStatus === 'submitted'
           ? 'Submitted for teacher review • Read-only'
@@ -1801,7 +1805,7 @@ async function loadAssignmentProgressCounts(assignment) {
         requestAnimationFrame(() => window.scrollTo(0, teacherDashboardScrollY));
       } else if (currentUserRole === 'student') {
         studentHistoryScreen.classList.remove('hidden');
-        document.getElementById('exitWorkspaceBtn').textContent = 'Back to Dashboard';
+        document.getElementById('exitWorkspaceBtn').innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back to Dashboard';
       } else {
         teacherDashboard.classList.remove('hidden');
       }
