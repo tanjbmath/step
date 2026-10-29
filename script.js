@@ -27,6 +27,7 @@
     // Keep exactly one live preview listener per joined student in the active assignment.
     const studentPreviewUnsubscribers = new Map();
     const studentPreviewData = new Map();
+    const studentPreviewVersions = new Map();
     let teacherStatsRefreshTimer = null;
     // Short-lived shared cache lets teacher stats and assignment cards reuse roster reads.
     const teacherRosterReadCache = new Map();
@@ -1278,21 +1279,37 @@ async function loadAssignmentProgressCounts(assignment) {
         const key = `${currentAssignmentId}:${studentUid}`;
         activeKeys.add(key);
         const img = document.getElementById(`thumb-${studentUid}`);
-        // Roster rerenders replace image elements; reuse the last preview without
-        // creating another listener or waiting for the next canvas save.
-        const cachedCanvasData = studentPreviewData.get(key);
-        if (img && cachedCanvasData && img.getAttribute('src') !== cachedCanvasData) img.src = cachedCanvasData;
+        // Roster rerenders replace image elements; reuse the last live or archived preview.
+        const cachedPreviewSource = studentPreviewData.get(key);
+        if (img && cachedPreviewSource && img.getAttribute('src') !== cachedPreviewSource) img.src = cachedPreviewSource;
         if (studentPreviewUnsubscribers.has(key)) return;
         const unsubscribe = db.collection('assignments').doc(currentAssignmentId)
           .collection('students').doc(studentUid).collection('slides').doc('slide_0')
-          .onSnapshot(slideDoc => {
-            const canvasData = slideDoc.exists ? slideDoc.data().canvasData : null;
-            if (canvasData) studentPreviewData.set(key, canvasData);
+          .onSnapshot(async slideDoc => {
+            const version = (studentPreviewVersions.get(key) || 0) + 1;
+            studentPreviewVersions.set(key, version);
+            const slideData = slideDoc.exists ? (slideDoc.data() || {}) : {};
+            let previewSource = slideData.canvasData || null;
+
+            // Submitted canvases move to Storage and canvasData is removed from Firestore.
+            // Resolve the archived image URL so the dashboard thumbnail remains visible.
+            if (!previewSource && slideData.canvasStoragePath && storage) {
+              try {
+                previewSource = await storage.ref(slideData.canvasStoragePath).getDownloadURL();
+              } catch (err) {
+                console.warn('Could not load archived student preview:', err);
+              }
+            }
+
+            // Ignore a slow Storage URL lookup if a newer live canvas snapshot arrived.
+            if (studentPreviewVersions.get(key) !== version) return;
+            if (previewSource) studentPreviewData.set(key, previewSource);
             else studentPreviewData.delete(key);
+
             const previewImg = document.getElementById(`thumb-${studentUid}`);
             if (!previewImg) return;
-            if (canvasData) {
-              if (previewImg.getAttribute('src') !== canvasData) previewImg.src = canvasData;
+            if (previewSource) {
+              if (previewImg.getAttribute('src') !== previewSource) previewImg.src = previewSource;
             } else {
               previewImg.removeAttribute('src');
             }
