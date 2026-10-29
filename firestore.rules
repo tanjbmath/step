@@ -553,6 +553,27 @@ service cloud.firestore {
     }
 
     // Server-only AI usage counters. Admin SDK access from Cloud Functions bypasses these client rules.
+    // Class registry: signed-in students and teachers can discover available classes.
+    // Only the teacher who created a class may modify its registry entry.
+    match /classes/{classId} {
+      allow read: if signedIn();
+      allow create: if isTeacher()
+        && request.resource.data.ownerTeacherId == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.keys().hasOnly([
+          'name', 'description', 'ownerTeacherId', 'createdAt', 'deleted'
+        ]);
+      allow update: if isTeacher()
+        && resource.data.ownerTeacherId == request.auth.uid
+        && request.resource.data.ownerTeacherId == resource.data.ownerTeacherId
+        && request.resource.data.keys().hasOnly([
+          'name', 'description', 'ownerTeacherId', 'createdAt', 'deleted', 'deletedAt'
+        ]);
+      allow delete: if isTeacher() && resource.data.ownerTeacherId == request.auth.uid;
+    }
+
     match /aiTutorUsage/{uid} {
       allow read, write: if false;
     }
