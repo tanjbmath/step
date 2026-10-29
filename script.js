@@ -576,6 +576,7 @@
           pendingPortalRole = state.pendingRole || state.role || (accountRole === 'teacher' ? 'teacher' : 'student');
           roleSelectionScreen.classList.add('hidden');
           document.getElementById('classSelectionScreen').classList.remove('hidden');
+          await loadClassRegistry();
           renderClassChoices();
           return true;
         }
@@ -743,6 +744,11 @@
     document.getElementById('selectTeacherBtn').addEventListener('click', () => switchRole('teacher', { fromWelcome: true }));
     document.getElementById('selectStudentBtn').addEventListener('click', () => switchRole('student', { fromWelcome: true }));
 
+    document.getElementById('createClassBtn').addEventListener('click', createClassFromForm);
+    document.getElementById('newClassName').addEventListener('keydown', event => {
+      if (event.key === 'Enter') createClassFromForm();
+    });
+
     document.getElementById('backToWelcomeFromClassBtn').addEventListener('click', () => {
       pendingPortalRole = null;
       document.getElementById('classSelectionScreen').classList.add('hidden');
@@ -901,6 +907,7 @@
         roleSelectionScreen.classList.add('hidden');
         document.getElementById('classSelectionScreen').classList.remove('hidden');
         resetRoleBtn.classList.add('hidden');
+        await loadClassRegistry();
         renderClassChoices();
         saveStepScreenState();
         return;
