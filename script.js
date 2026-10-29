@@ -173,6 +173,10 @@
               nameInput.focus();
             }
           }
+          else if (!window.__stepScreenRestoreHandled) {
+            window.__stepScreenRestoreHandled = true;
+            await restoreStepScreenState();
+          }
         } else {
           signedOut.classList.remove('hidden');
           signedIn.classList.add('hidden');
@@ -238,6 +242,122 @@
     let inspectingStudentId = null;
     // Preserve the teacher dashboard's position while temporarily inspecting student work.
     let teacherDashboardScrollY = 0;
+
+    // Restore the user's last in-app screen after a browser refresh. sessionStorage
+    // keeps this state scoped to the current tab and avoids stale cross-session reopening.
+    const STEP_SCREEN_STATE_KEY = 'step_screen_state_v1';
+    let restoringStepScreen = false;
+
+    function saveStepScreenState() {
+      if (restoringStepScreen || !signedInUser) return;
+      const isVisible = element => Boolean(element && !element.classList.contains('hidden'));
+      let screen = 'role';
+      if (isVisible(workspaceScreen)) screen = 'workspace';
+      else if (isVisible(teacherDashboard)) screen = 'teacher-dashboard';
+      else if (isVisible(studentJoinScreen)) screen = 'student-join';
+      else if (isVisible(studentHistoryScreen)) screen = 'student-history';
+      else if (isVisible(roleSelectionScreen)) screen = 'role';
+
+      const state = {
+        uid: signedInUser.uid,
+        screen,
+        role: currentUserRole || (accountRole === 'teacher' ? 'teacher' : 'student'),
+        assignmentId: currentAssignmentId || null,
+        sessionCode: currentSessionCode || '',
+        studentId: inspectingStudentId || null,
+        studentName: studentName || '',
+        submissionStatus: currentSubmissionStatus || 'in-progress',
+        slideIndex: Number.isInteger(currentSlideIndex) ? currentSlideIndex : 0,
+        scrollY: Math.max(0, window.scrollY || document.documentElement.scrollTop || 0),
+        savedAt: Date.now()
+      };
+      try { sessionStorage.setItem(STEP_SCREEN_STATE_KEY, JSON.stringify(state)); }
+      catch (err) { console.warn('Could not save screen state:', err); }
+    }
+
+    function readStepScreenState() {
+      try {
+        const state = JSON.parse(sessionStorage.getItem(STEP_SCREEN_STATE_KEY) || 'null');
+        if (!state || !signedInUser || state.uid !== signedInUser.uid) return null;
+        // Do not restore old screens after a long gap or a deliberate new session.
+        if (Date.now() - Number(state.savedAt || 0) > 12 * 60 * 60 * 1000) return null;
+        return state;
+      } catch (err) { return null; }
+    }
+
+    async function restoreStepScreenState() {
+      const state = readStepScreenState();
+      if (!state) return false;
+      restoringStepScreen = true;
+      try {
+        if (state.screen === 'workspace' && state.role === 'teacher' && state.studentId && state.assignmentId) {
+          await switchRole('teacher');
+          const assignmentDoc = await db.collection('assignments').doc(state.assignmentId).get();
+          if (!assignmentDoc.exists) return false;
+          const studentDoc = await db.collection('assignments').doc(state.assignmentId)
+            .collection('students').doc(state.studentId).get();
+          if (!studentDoc.exists) return false;
+          const record = studentDoc.data() || {};
+          currentAssignmentId = state.assignmentId;
+          currentAssignmentData = assignmentDoc.data() || {};
+          currentSessionCode = state.sessionCode || currentAssignmentData.sessionCode || '';
+          currentUserRole = 'teacher';
+          currentSlideIndex = Math.max(0, Number(state.slideIndex) || 0);
+          openWorkspaceForInspection(
+            state.studentId,
+            record.name || state.studentName || 'Student',
+            record.status || state.submissionStatus || 'submitted',
+            { ...record, id: state.studentId, studentUid: state.studentId }
+          );
+          requestAnimationFrame(() => window.scrollTo(0, state.scrollY || 0));
+          return true;
+        }
+
+        if (state.screen === 'workspace' && state.role === 'student' && state.assignmentId) {
+          if (state.sessionCode) {
+            const reopened = await openJoinedAssignmentFromLink(state.sessionCode);
+            if (reopened) {
+              currentSlideIndex = Math.max(0, Number(state.slideIndex) || 0);
+              setupSlideWorkspace();
+              return true;
+            }
+          }
+          await reopenSavedAssignment(state.assignmentId, {
+            status: state.submissionStatus || 'in-progress',
+            sessionCode: state.sessionCode || '',
+            assignedStudentKey: null
+          });
+          currentSlideIndex = Math.max(0, Number(state.slideIndex) || 0);
+          setupSlideWorkspace();
+          return true;
+        }
+
+        if (state.screen === 'teacher-dashboard' && accountRole === 'teacher') {
+          await switchRole('teacher');
+          requestAnimationFrame(() => window.scrollTo(0, state.scrollY || 0));
+          return true;
+        }
+        if (state.screen === 'student-join') {
+          await switchRole('student', { showJoinForm: true });
+          document.getElementById('joinCodeInput').value = state.sessionCode || '';
+          return true;
+        }
+        if (state.screen === 'student-history') {
+          await switchRole('student');
+          requestAnimationFrame(() => window.scrollTo(0, state.scrollY || 0));
+          return true;
+        }
+        return false;
+      } catch (err) {
+        console.warn('Could not restore the previous screen; opening the default view instead:', err);
+        return false;
+      } finally {
+        restoringStepScreen = false;
+      }
+    }
+
+    // pagehide fires on reload/navigation and captures the latest screen and canvas page.
+    window.addEventListener('pagehide', saveStepScreenState);
 
     // Teacher-controlled help feature. Peer Help is opt-in; missing flags default to disabled.
     function isPeerHelpEnabled() { return currentAssignmentData?.peerHelpEnabled === true; }
@@ -466,6 +586,7 @@
       }
 
       currentUserRole = role;
+      saveStepScreenState();
       roleSelectionScreen.classList.add('hidden');
       studentHistoryScreen.classList.add('hidden');
       resetRoleBtn.classList.remove('hidden');
@@ -1390,6 +1511,7 @@ async function loadAssignmentProgressCounts(assignment) {
       // Live roster previews are unnecessary while inspecting one student's full canvas.
       stopStudentPreviewListeners();
       inspectingStudentId = stId;
+      saveStepScreenState();
       currentSubmissionStatus = status || 'submitted';
       // Teacher feedback should be visually distinct from the student's own writing.
       currentColor = '#dc2626';
@@ -1453,6 +1575,7 @@ async function loadAssignmentProgressCounts(assignment) {
       currentAssignmentId = assignmentId;
       currentAssignmentData = assignment;
       currentSessionCode = inputCode;
+      saveStepScreenState();
       currentAssignedStudentKey = assignedDoc.exists ? assignedKey : null;
       currentSubmissionStatus = assignedStatus === 'assignment-started' ? 'in-progress' : assignedStatus;
       window.currentStudentHelpRequested = Boolean(membership.helpRequested);
@@ -1598,6 +1721,7 @@ async function loadAssignmentProgressCounts(assignment) {
       currentAssignmentData = matchedData;
       currentAssignmentId = matchedDocId;
       currentSessionCode = inputCode;
+      saveStepScreenState();
       updateSubmitAssignmentButton();
 
       studentJoinScreen.classList.add('hidden');
@@ -1811,6 +1935,7 @@ async function loadAssignmentProgressCounts(assignment) {
         currentAssignmentData = doc.data();
         currentAssignmentId = assignmentId;
         currentSessionCode = currentAssignmentData.sessionCode || submission.sessionCode || '';
+        saveStepScreenState();
         studentId = signedInUser.uid;
         studentName = studentProfileName || signedInUser.displayName || 'Student';
         inspectingStudentId = null;
@@ -1850,6 +1975,7 @@ async function loadAssignmentProgressCounts(assignment) {
       } else {
         teacherDashboard.classList.remove('hidden');
       }
+      saveStepScreenState();
       // Keep the teacher's existing dashboard/assignment view in place. Reloading it here
       // resets the view and causes avoidable Firestore reads.
     });
