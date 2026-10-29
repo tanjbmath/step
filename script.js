@@ -2127,7 +2127,10 @@ async function loadAssignmentProgressCounts(assignment) {
         }
       } catch (err) {
         console.error('Could not join assignment:', err);
-        showToast('Could not join assignment: ' + err.message, 'error');
+        const message = err.code === 'permission-denied' && studentClassId
+          ? 'This account is assigned to a different class. Ask your teacher to check your class assignment.'
+          : err.message;
+        showToast('Could not join assignment: ' + message, 'error');
         joinBtn.disabled = false;
         joinBtn.innerHTML = '<span>Start Working</span> <i class="fa-solid fa-arrow-right"></i>';
         return;
