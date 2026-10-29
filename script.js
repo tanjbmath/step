@@ -686,6 +686,11 @@
 
       currentUserRole = role;
       pendingPortalRole = null;
+      const activeClassBadge = document.getElementById('activeClassBadge');
+      if (activeClassBadge) {
+        activeClassBadge.textContent = 'Class: ' + currentClassId;
+        activeClassBadge.classList.remove('hidden');
+      }
       document.getElementById('classSelectionScreen').classList.add('hidden');
       roleSelectionScreen.classList.add('hidden');
       saveStepScreenState();
@@ -742,6 +747,8 @@
       
       roleSelectionScreen.classList.remove('hidden');
       resetRoleBtn.classList.add('hidden');
+      const activeClassBadge = document.getElementById('activeClassBadge');
+      if (activeClassBadge) activeClassBadge.classList.add('hidden');
       peersBtn.classList.add('hidden');
       closePeersDirectory();
       roleBadge.textContent = accountRole === 'teacher' ? 'Teacher Account' : 'Student Account';
