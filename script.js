@@ -267,6 +267,12 @@
         });
         STEP_CLASSES = [...byId.values()].sort((a, b) =>
           a.id === 'MB1' ? -1 : b.id === 'MB1' ? 1 : a.name.localeCompare(b.name));
+        if (!STEP_CLASSES.some(item => item.id === currentClassId)) {
+          currentClassId = STEP_CLASSES[0]?.id || 'MB1';
+        }
+        if (!STEP_CLASSES.some(item => item.id === selectedClassId)) {
+          selectedClassId = currentClassId;
+        }
       } catch (err) { console.error('Could not load class registry:', err); }
     }
 
