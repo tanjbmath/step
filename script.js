@@ -296,7 +296,10 @@
       const container = document.getElementById('classOptionsContainer');
       if (!container) return;
       container.innerHTML = '';
-      STEP_CLASSES.forEach(item => {
+      const visibleClasses = pendingPortalRole === 'teacher'
+        ? STEP_CLASSES.filter(item => !item.ownerTeacherId || item.ownerTeacherId === signedInUser?.uid)
+        : STEP_CLASSES;
+      visibleClasses.forEach(item => {
         const card = document.createElement('div');
         card.className = 'rounded-2xl border-2 p-3 transition ' +
           (selectedClassId === item.id
@@ -490,7 +493,7 @@
         } else if (classId === 'MB1') {
           await classRef.set({
             name: 'MB1', description: 'Built-in class', ownerTeacherId: signedInUser.uid,
-            deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(), deleted: true
           });
         }
         STEP_CLASSES = STEP_CLASSES.filter(item => item.id !== classId);
