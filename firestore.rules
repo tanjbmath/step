@@ -423,7 +423,9 @@ service cloud.firestore {
           || (signedIn() && resource.data.helperUid == request.auth.uid
               && resource.data.status in ['helping', 'submitted']);
 
-        allow list: if false;
+        // Only the owning teacher may enumerate locks for assignment cleanup.
+        // Individual lock reads remain restricted to the requester, helper, completed peers, and teacher.
+        allow list: if ownsAssignment(assignmentId);
 
         allow create: if signedIn()
           && isAssignmentMember(assignmentId, request.auth.uid)
