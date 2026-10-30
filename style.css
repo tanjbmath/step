@@ -180,3 +180,53 @@
   0%, 100% { box-shadow: 0 0 0 2px rgba(244, 63, 94, .12), 0 0 10px rgba(244, 63, 94, .22); }
   50% { box-shadow: 0 0 0 4px rgba(244, 63, 94, .2), 0 0 18px rgba(244, 63, 94, .5); }
 }
+
+
+/* Compact, uniform student header controls. Keep all four controls the same square size. */
+#activeClassBadge,
+#roleBadge,
+#peersBtn,
+#resetRoleBtn {
+  box-sizing: border-box !important;
+  width: 56px !important;
+  min-width: 56px !important;
+  height: 56px !important;
+  min-height: 56px !important;
+  padding: 4px !important;
+  border-radius: 12px !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-align: center;
+  white-space: normal;
+  font-size: 10px !important;
+  line-height: 1.15 !important;
+  overflow-wrap: anywhere;
+}
+#activeClassBadge:not(.hidden),
+#roleBadge:not(.hidden),
+#peersBtn:not(.hidden),
+#resetRoleBtn:not(.hidden) {
+  display: flex !important;
+}
+#peersBtn i,
+#resetRoleBtn i {
+  font-size: 15px;
+  line-height: 1;
+}
+#resetRoleBtn span {
+  display: block;
+}
+@media (max-width: 480px) {
+  #activeClassBadge,
+  #roleBadge,
+  #peersBtn,
+  #resetRoleBtn {
+    width: 50px !important;
+    min-width: 50px !important;
+    height: 50px !important;
+    min-height: 50px !important;
+  }
+}
