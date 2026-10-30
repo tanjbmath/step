@@ -1350,7 +1350,37 @@
     function updateAssignmentStudentLink() {
       const input = document.getElementById('assignmentStudentLink');
       if (input) input.value = getAssignmentStudentLink();
+      const panel = document.getElementById('assignmentQrPanel');
+      if (panel && !panel.classList.contains('hidden')) renderAssignmentQrCode();
     }
+
+    function renderAssignmentQrCode() {
+      const target = document.getElementById('assignmentQrCode');
+      const link = getAssignmentStudentLink();
+      if (!target || !link) return;
+      if (typeof QRCode === 'undefined') { target.textContent = 'QR code library did not load. Use Copy Student Link instead.'; return; }
+      target.innerHTML = '';
+      new QRCode(target, { text: link, width: 220, height: 220, colorDark: '#0f172a', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+    }
+
+    document.getElementById('toggleAssignmentQrBtn').addEventListener('click', () => {
+      const panel = document.getElementById('assignmentQrPanel');
+      const opening = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !opening);
+      document.getElementById('toggleAssignmentQrBtn').innerHTML = opening ? '<i class="fa-solid fa-qrcode"></i> Hide QR Code' : '<i class="fa-solid fa-qrcode"></i> Show QR Code';
+      if (opening) renderAssignmentQrCode();
+    });
+
+    document.getElementById('downloadAssignmentQrBtn').addEventListener('click', () => {
+      const target = document.getElementById('assignmentQrCode');
+      const canvas = target && target.querySelector('canvas');
+      const image = target && target.querySelector('img');
+      const dataUrl = (canvas && canvas.toDataURL('image/png')) || (image && image.src);
+      if (!dataUrl) return showToast('Generate the QR code first, then try again.', 'error');
+      const anchor = document.createElement('a');
+      anchor.href = dataUrl; anchor.download = 'STEP-' + (currentSessionCode || 'assignment') + '-QR.png';
+      document.body.appendChild(anchor); anchor.click(); anchor.remove();
+    });
 
     document.getElementById('copyAssignmentLinkBtn').addEventListener('click', async () => {
       const link = getAssignmentStudentLink();
