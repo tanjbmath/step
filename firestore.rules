@@ -147,21 +147,32 @@ service cloud.firestore {
           && request.resource.data.classId == classId
           && membershipAssignmentMatchesClass();
 
-        allow update: if isOwner(uid)
+        allow update: if (isOwner(uid)
           && request.resource.data.keys().hasOnly(['classId', 'assignmentId', 'joinedAt'])
           && request.resource.data.classId == classId
           && resource.data.classId == classId
-          && membershipAssignmentMatchesClass();
+          && membershipAssignmentMatchesClass())
+          || (ownsAssignment(request.resource.data.assignmentId)
+            && request.resource.data.keys().hasOnly(['classId', 'assignmentId', 'joinedAt'])
+            && request.resource.data.classId == classId
+            && resource.data.classId == classId
+            && get(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)).data.classId == classId
+            && getAfter(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)/students/$(uid)).data.uid == uid);
 
         allow delete: if false;
       }
 
       match /submissions/{assignmentId} {
         allow read: if isOwner(uid);
-        allow create: if isOwner(uid)
+        allow create: if (isOwner(uid)
           && request.resource.data.assignmentId == assignmentId
           && request.resource.data.status in ['in-progress', 'submitted']
-          && isAssignmentMember(assignmentId, uid);
+          && isAssignmentMember(assignmentId, uid))
+          || (ownsAssignment(assignmentId)
+            && request.resource.data.assignmentId == assignmentId
+            && request.resource.data.status == 'assignment-started'
+            && request.resource.data.keys().hasOnly(['assignmentId', 'classId', 'title', 'description', 'sessionCode', 'classLabel', 'status', 'assignedAt', 'slideCount'])
+            && getAfter(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(uid)).data.uid == uid);
         allow update: if (
             isOwner(uid)
             && request.resource.data.assignmentId == assignmentId
@@ -211,6 +222,15 @@ service cloud.firestore {
         );
 
       allow delete: if false;
+    }
+
+    // Teachers may read membership records only for a class they own; MB1 is the shared built-in class.
+    // A classId equality constraint is required by the collection-group roster query.
+    match /{path=**}/classes/{classId} {
+      allow read: if isTeacher() && resource.data.classId == classId
+        && (classId == 'MB1'
+          || (exists(/databases/$(database)/documents/classes/$(classId))
+            && get(/databases/$(database)/documents/classes/$(classId)).data.ownerTeacherId == request.auth.uid));
     }
 
     // Collection-group reads are limited to the signed-in student's own email.
@@ -521,7 +541,7 @@ service cloud.firestore {
       match /students/{studentUid} {
         allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
 
-        allow create: if isOwner(studentUid)
+        allow create: if (isOwner(studentUid)
           && request.resource.data.uid == studentUid
           && request.resource.data.sessionCode is string
           && exists(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode))
@@ -540,7 +560,10 @@ service cloud.firestore {
               && get(/databases/$(database)/documents/assignmentLookups/$(request.resource.data.sessionCode)).data.assignmentId == assignmentId
             )
             || ownsAssignment(assignmentId)
-          );
+          )) || (ownsAssignment(assignmentId)
+            && request.resource.data.uid == studentUid
+            && request.resource.data.sessionCode == get(/databases/$(database)/documents/assignments/$(assignmentId)).data.sessionCode
+            && request.resource.data.classId == get(/databases/$(database)/documents/assignments/$(assignmentId)).data.classId);
 
         allow update: if (
             isOwner(studentUid)
