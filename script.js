@@ -440,11 +440,34 @@
       }
     }
 
+    // Add precise operation labels to permission errors during class cleanup.
+    async function runClassDeleteStep(label, action) {
+      try {
+        return await action();
+      } catch (err) {
+        const detail = {
+          label,
+          code: err?.code || 'unknown',
+          message: err?.message || String(err),
+          serverResponse: err?.serverResponse || null
+        };
+        console.error('[Class deletion] Failed operation:', detail, err);
+        const wrapped = new Error(label + ' (' + detail.code + '): ' + detail.message);
+        wrapped.code = err?.code;
+        wrapped.originalError = err;
+        throw wrapped;
+      }
+    }
+
     async function deleteStoragePrefix(prefix) {
       if (!storage) return;
-      const result = await storage.ref(prefix).listAll();
+      const result = await runClassDeleteStep('Storage list: ' + prefix, () => storage.ref(prefix).listAll());
       for (const item of result.items) {
-        await item.delete().catch(err => { if (err.code !== 'storage/object-not-found') throw err; });
+        await runClassDeleteStep('Storage delete: ' + item.fullPath, () =>
+          item.delete().catch(err => {
+            if (err.code !== 'storage/object-not-found') throw err;
+          })
+        );
       }
       for (const folder of result.prefixes) await deleteStoragePrefix(folder.fullPath);
     }
@@ -454,70 +477,81 @@
         throw new Error('This account does not own assignment ' + assignmentId + '. The class was not fully deleted.');
       }
       const ref = db.collection('assignments').doc(assignmentId);
-      const students = await ref.collection('students').get();
+      const students = await runClassDeleteStep('Firestore read: assignments/' + assignmentId + '/students', () => ref.collection('students').get());
       for (const studentDoc of students.docs) {
-        const slides = await studentDoc.ref.collection('slides').get();
+        const slides = await runClassDeleteStep('Firestore read: ' + studentDoc.ref.path + '/slides', () => studentDoc.ref.collection('slides').get());
         for (const slide of slides.docs) {
           const path = slide.data()?.canvasStoragePath;
-          if (path && storage) await storage.ref(path).delete().catch(err => {
-            if (err.code !== 'storage/object-not-found') throw err;
-          });
+          if (path && storage) {
+            await runClassDeleteStep('Storage delete: ' + path, () => storage.ref(path).delete().catch(err => {
+              if (err.code !== 'storage/object-not-found') throw err;
+            }));
+          }
         }
         for (let i = 0; i < slides.docs.length; i += 400) {
           const batch = db.batch();
-          slides.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
-          await batch.commit();
+          const chunk = slides.docs.slice(i, i + 400);
+          chunk.forEach(doc => batch.delete(doc.ref));
+          await runClassDeleteStep('Firestore batch delete: ' + chunk.map(doc => doc.ref.path).join(', '), () => batch.commit());
         }
-        await studentDoc.ref.delete();
+        await runClassDeleteStep('Firestore delete: ' + studentDoc.ref.path, () => studentDoc.ref.delete());
         const userRef = db.collection('users').doc(studentDoc.id);
         const submissionRef = userRef.collection('submissions').doc(assignmentId);
-        const submission = await submissionRef.get();
-        if (submission.exists) await submissionRef.delete();
-        const events = await userRef.collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get();
+        const submission = await runClassDeleteStep('Firestore read: ' + submissionRef.path, () => submissionRef.get());
+        if (submission.exists) await runClassDeleteStep('Firestore delete: ' + submissionRef.path, () => submissionRef.delete());
+        const events = await runClassDeleteStep('Firestore query: users/' + studentDoc.id + '/peerHelpEvents where assignmentId=' + assignmentId, () =>
+          userRef.collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get()
+        );
         for (let i = 0; i < events.docs.length; i += 400) {
           const batch = db.batch();
-          events.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
-          await batch.commit();
+          const chunk = events.docs.slice(i, i + 400);
+          chunk.forEach(doc => batch.delete(doc.ref));
+          await runClassDeleteStep('Firestore batch delete: ' + chunk.map(doc => doc.ref.path).join(', '), () => batch.commit());
         }
       }
-      const teacherEvents = await db.collection('users').doc(signedInUser.uid)
-        .collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get();
+      const teacherEvents = await runClassDeleteStep('Firestore query: users/' + signedInUser.uid + '/peerHelpEvents where assignmentId=' + assignmentId, () =>
+        db.collection('users').doc(signedInUser.uid).collection('peerHelpEvents').where('assignmentId', '==', assignmentId).get()
+      );
       for (let i = 0; i < teacherEvents.docs.length; i += 400) {
         const batch = db.batch();
-        teacherEvents.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
+        const chunk = teacherEvents.docs.slice(i, i + 400);
+        chunk.forEach(doc => batch.delete(doc.ref));
+        await runClassDeleteStep('Firestore batch delete: ' + chunk.map(doc => doc.ref.path).join(', '), () => batch.commit());
       }
-      const assigned = await ref.collection('assignedStudents').get();
+      const assigned = await runClassDeleteStep('Firestore read: assignments/' + assignmentId + '/assignedStudents', () => ref.collection('assignedStudents').get());
       for (let i = 0; i < assigned.docs.length; i += 400) {
         const batch = db.batch();
-        assigned.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
+        const chunk = assigned.docs.slice(i, i + 400);
+        chunk.forEach(doc => batch.delete(doc.ref));
+        await runClassDeleteStep('Firestore batch delete: ' + chunk.map(doc => doc.ref.path).join(', '), () => batch.commit());
       }
-      const requests = await ref.collection('helpRequests').get();
+      const requests = await runClassDeleteStep('Firestore read: assignments/' + assignmentId + '/helpRequests', () => ref.collection('helpRequests').get());
       for (const request of requests.docs) {
-        const slides = await request.ref.collection('slides').get();
+        const slides = await runClassDeleteStep('Firestore read: ' + request.ref.path + '/slides', () => request.ref.collection('slides').get());
         for (let i = 0; i < slides.docs.length; i += 400) {
           const batch = db.batch();
-          slides.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
-          await batch.commit();
+          const chunk = slides.docs.slice(i, i + 400);
+          chunk.forEach(doc => batch.delete(doc.ref));
+          await runClassDeleteStep('Firestore batch delete: ' + chunk.map(doc => doc.ref.path).join(', '), () => batch.commit());
         }
-        await request.ref.delete();
+        await runClassDeleteStep('Firestore delete: ' + request.ref.path, () => request.ref.delete());
       }
       for (const collectionName of ['helpRequestOwners', 'helpLocks']) {
-        const snapshot = await ref.collection(collectionName).get();
+        const snapshot = await runClassDeleteStep('Firestore read: assignments/' + assignmentId + '/' + collectionName, () => ref.collection(collectionName).get());
         for (let i = 0; i < snapshot.docs.length; i += 400) {
           const batch = db.batch();
-          snapshot.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
-          await batch.commit();
+          const chunk = snapshot.docs.slice(i, i + 400);
+          chunk.forEach(doc => batch.delete(doc.ref));
+          await runClassDeleteStep('Firestore batch delete: ' + chunk.map(doc => doc.ref.path).join(', '), () => batch.commit());
         }
       }
       if (assignment?.sessionCode) {
         const lookupRef = db.collection('assignmentLookups').doc(assignment.sessionCode);
-        const lookup = await lookupRef.get();
-        if (lookup.exists) await lookupRef.delete();
+        const lookup = await runClassDeleteStep('Firestore read: ' + lookupRef.path, () => lookupRef.get());
+        if (lookup.exists) await runClassDeleteStep('Firestore delete: ' + lookupRef.path, () => lookupRef.delete());
       }
       await deleteStoragePrefix('student-work/' + assignmentId);
-      await ref.delete();
+      await runClassDeleteStep('Firestore delete: ' + ref.path, () => ref.delete());
     }
 
     async function deleteClassFromSelection(classId) {
@@ -531,8 +565,8 @@
         showToast('Only the teacher who created this class can delete it.', 'error'); return;
       }
       const typed = window.prompt(
-        'PERMANENT DELETION\n\nThis will delete class "' + target.name +
-        '", all its assignments, student canvases, submitted work, help requests, and saved files. This cannot be undone.\n\nTo confirm, type DELETE in capital letters:'
+        'PERMANENT DELETION\\n\\nThis will delete class "' + target.name +
+        '", all its assignments, student canvases, submitted work, help requests, and saved files. This cannot be undone.\\n\\nTo confirm, type DELETE in capital letters:'
       );
       if (typed !== 'DELETE') {
         showToast('Class deletion cancelled. No data was deleted.', 'info'); return;
@@ -540,43 +574,49 @@
       if (!window.confirm('Final confirmation: permanently delete ALL data belonging to class "' + target.name + '"?')) return;
       classManagementBusy = true;
       try {
-        const snapshot = await db.collection('assignments').where('teacherId', '==', signedInUser.uid).get();
+        const snapshot = await runClassDeleteStep('Firestore query: assignments where teacherId=' + signedInUser.uid, () =>
+          db.collection('assignments').where('teacherId', '==', signedInUser.uid).get()
+        );
         const assignments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
           .filter(item => (item.classId || 'MB1') === classId);
         for (const assignment of assignments) await deleteClassAssignmentData(assignment.id, assignment);
 
         const classRef = db.collection('classes').doc(classId);
-        const classDoc = await classRef.get();
+        const classDoc = await runClassDeleteStep('Firestore read: ' + classRef.path, () => classRef.get());
         if (classDoc.exists) {
           const data = classDoc.data() || {};
           if (data.ownerTeacherId && data.ownerTeacherId !== signedInUser.uid) {
             throw new Error('Only the class creator can delete this class.');
           }
-          await classRef.set({
+          await runClassDeleteStep('Firestore soft-delete/update: ' + classRef.path, () => classRef.set({
             name: data.name || target.name,
             description: data.description || target.description || '',
             ownerTeacherId: data.ownerTeacherId || signedInUser.uid,
             deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
+          }, { merge: true }));
         } else if (classId === 'MB1') {
-          await classRef.set({
+          await runClassDeleteStep('Firestore create tombstone: ' + classRef.path, () => classRef.set({
             name: 'MB1', description: 'Built-in class', ownerTeacherId: signedInUser.uid,
             createdAt: firebase.firestore.FieldValue.serverTimestamp(), deleted: true
-          });
+          }));
         }
         STEP_CLASSES = STEP_CLASSES.filter(item => item.id !== classId);
         if (currentClassId === classId) currentClassId = STEP_CLASSES[0]?.id || 'MB1';
         if (selectedClassId === classId) selectedClassId = STEP_CLASSES[0]?.id || 'MB1';
         try { const key = activeClassStorageKey(); if (key) localStorage.setItem(key, currentClassId); } catch (_) {}
-        await loadClassRegistry();
+        await runClassDeleteStep('Reload class registry', () => loadClassRegistry());
         renderClassChoices();
         saveStepScreenState();
         showToast('Class "' + target.name + '" and its class-owned data were deleted.', 'success');
       } catch (err) {
         console.error('Class deletion failed:', err);
-        showToast('Class deletion stopped before completion: ' + err.message + '. Some records may already have been deleted; inspect Firebase before retrying.', 'error');
-        await loadClassRegistry();
-        renderClassChoices();
+        showToast('Class deletion stopped at ' + err.message + '. Some records may already have been deleted; do not retry until the failed operation is reviewed.', 'error');
+        try {
+          await loadClassRegistry();
+          renderClassChoices();
+        } catch (refreshErr) {
+          console.error('[Class deletion] Could not refresh class registry after failure:', refreshErr);
+        }
       } finally {
         classManagementBusy = false;
         renderClassChoices();
