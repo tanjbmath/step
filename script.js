@@ -1104,6 +1104,7 @@
 
     document.getElementById('openCreateModalBtn').addEventListener('click', () => {
       slidesConfigContainer.innerHTML = '';
+      loadAssignmentClassRoster();
       slideConfigCount = 0;
       addSlideConfigRow();
       createAssignmentModal.classList.remove('hidden');
@@ -1226,6 +1227,79 @@
       });
     }
 
+    let assignmentClassRoster = [];
+    let selectedAssignmentStudentIds = new Set();
+    let assignmentRosterLoaded = false;
+
+    async function loadAssignmentClassRoster() {
+      const list = document.getElementById('assignmentRosterList');
+      const count = document.getElementById('assignmentRosterCount');
+      const className = document.getElementById('assignmentRosterClassName');
+      if (!list || !signedInUser || !db) return;
+      assignmentRosterLoaded = false;
+      list.innerHTML = '<p class="text-xs text-slate-500 p-2">Loading class roster…</p>';
+      count.textContent = 'Loading…';
+      className.textContent = getClassDisplayName(currentClassId);
+      selectedAssignmentStudentIds = new Set();
+      document.getElementById('assignmentRosterSelectAll').checked = false;
+      try {
+        const membershipSnapshot = await db.collectionGroup('classes').where('classId', '==', currentClassId).get();
+        const members = await Promise.all(membershipSnapshot.docs.map(async membershipDoc => {
+          const uid = membershipDoc.ref.parent.parent && membershipDoc.ref.parent.parent.id;
+          if (!uid || uid === signedInUser.uid) return null;
+          const directoryDoc = await db.collection('peerDirectory').doc(uid).get();
+          const directory = directoryDoc.exists ? directoryDoc.data() : {};
+          return { uid, name: String(directory.studentName || 'Student').trim() };
+        }));
+        assignmentClassRoster = members.filter(Boolean).sort((a,b) => a.name.localeCompare(b.name, undefined, {sensitivity:'base'}));
+        assignmentRosterLoaded = true;
+        renderAssignmentClassRoster();
+      } catch (err) {
+        console.error('Class roster load failed:', err);
+        assignmentClassRoster = [];
+        assignmentRosterLoaded = true;
+        list.innerHTML = '<p class="text-xs text-rose-600 p-2">Could not load this class roster. Check that the latest Firestore rules have been published.</p>';
+        count.textContent = 'Roster unavailable';
+      }
+    }
+
+    function renderAssignmentClassRoster() {
+      const list = document.getElementById('assignmentRosterList');
+      const count = document.getElementById('assignmentRosterCount');
+      const query = (document.getElementById('assignmentRosterSearch').value || '').trim().toLocaleLowerCase();
+      if (!list) return;
+      const visible = assignmentClassRoster.filter(student => student.name.toLocaleLowerCase().includes(query));
+      count.textContent = selectedAssignmentStudentIds.size + ' selected • ' + assignmentClassRoster.length + ' in class';
+      list.innerHTML = '';
+      if (!visible.length) {
+        list.innerHTML = '<p class="text-xs text-slate-500 p-2">' + (assignmentClassRoster.length ? 'No students match your search.' : 'No registered students have joined this class yet.') + '</p>';
+      } else {
+        visible.forEach(student => {
+          const label = document.createElement('label');
+          label.className = 'flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-slate-50 text-sm cursor-pointer';
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox'; checkbox.checked = selectedAssignmentStudentIds.has(student.uid); checkbox.className = 'rounded border-slate-300';
+          checkbox.addEventListener('change', () => {
+            if (checkbox.checked) selectedAssignmentStudentIds.add(student.uid); else selectedAssignmentStudentIds.delete(student.uid);
+            renderAssignmentClassRoster();
+          });
+          const name = document.createElement('span'); name.className = 'text-slate-700'; name.textContent = student.name;
+          label.append(checkbox, name); list.appendChild(label);
+        });
+      }
+      const selectAll = document.getElementById('assignmentRosterSelectAll');
+      if (selectAll) {
+        selectAll.checked = assignmentClassRoster.length > 0 && assignmentClassRoster.every(student => selectedAssignmentStudentIds.has(student.uid));
+        selectAll.indeterminate = !selectAll.checked && selectedAssignmentStudentIds.size > 0;
+      }
+    }
+
+    document.getElementById('assignmentRosterSearch').addEventListener('input', renderAssignmentClassRoster);
+    document.getElementById('assignmentRosterSelectAll').addEventListener('change', event => {
+      selectedAssignmentStudentIds = new Set(event.target.checked ? assignmentClassRoster.map(student => student.uid) : []);
+      renderAssignmentClassRoster();
+    });
+
     createAssignmentForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       
@@ -1233,6 +1307,10 @@
       const desc = document.getElementById('assignDescInput').value.trim();
       const classLabel = document.getElementById('assignClassLabelInput').value.trim();
 
+      if (!assignmentRosterLoaded) {
+        showToast('Wait for the current class roster to finish loading before publishing.', 'info');
+        return;
+      }
       if (!title) {
         showToast("Please enter an assignment title", "error");
         return;
@@ -1314,6 +1392,22 @@
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
+        // Grant dashboard access only to the selected members of the active class.
+        const selectedMembers = assignmentClassRoster.filter(student => selectedAssignmentStudentIds.has(student.uid));
+        for (let offset = 0; offset < selectedMembers.length; offset += 150) {
+          const batch = db.batch();
+          selectedMembers.slice(offset, offset + 150).forEach(student => {
+            const assignmentRef = db.collection('assignments').doc(docId);
+            const studentRef = assignmentRef.collection('students').doc(student.uid);
+            const classMembershipRef = db.collection('users').doc(student.uid).collection('classes').doc(currentClassId);
+            const submissionRef = db.collection('users').doc(student.uid).collection('submissions').doc(docId);
+            batch.set(studentRef, { uid: student.uid, name: student.name, sessionCode: code, classId: currentClassId, status: 'assignment-started', assignedAt: firebase.firestore.FieldValue.serverTimestamp() });
+            batch.set(classMembershipRef, { classId: currentClassId, assignmentId: docId, joinedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            batch.set(submissionRef, { assignmentId: docId, classId: currentClassId, title, description: desc, sessionCode: code, classLabel, status: 'assignment-started', assignedAt: firebase.firestore.FieldValue.serverTimestamp(), slideCount: slides.length });
+          });
+          await batch.commit();
+        }
+        if (selectedMembers.length) await db.collection('assignments').doc(docId).update({ assignedStudentCount: selectedMembers.length });
 
         currentAssignmentId = docId;
         currentSessionCode = code;
@@ -1322,6 +1416,8 @@
 
         createAssignmentModal.classList.add('hidden');
         createAssignmentForm.reset();
+        selectedAssignmentStudentIds = new Set();
+        assignmentClassRoster = [];
         showToast(`Published! Share session code ${code} with your students.`, "success");
         renderTeacherAssignments();
         loadTeacherAssignmentView(docId);
