@@ -1243,12 +1243,15 @@
       selectedAssignmentStudentIds = new Set();
       document.getElementById('assignmentRosterSelectAll').checked = false;
       try {
-        const membershipSnapshot = await db.collectionGroup('classes').where('classId', '==', currentClassId).get();
-        const members = await Promise.all(membershipSnapshot.docs.map(async membershipDoc => {
-          const uid = membershipDoc.ref.parent.parent && membershipDoc.ref.parent.parent.id;
+        // Start from the minimal public student directory, then verify class membership
+        // with a direct read of users/{uid}/classes/{classId}. Never list unrelated classes.
+        const directorySnapshot = await db.collection('peerDirectory').get();
+        const members = await Promise.all(directorySnapshot.docs.map(async directoryDoc => {
+          const uid = directoryDoc.id;
           if (!uid || uid === signedInUser.uid) return null;
-          const directoryDoc = await db.collection('peerDirectory').doc(uid).get();
-          const directory = directoryDoc.exists ? directoryDoc.data() : {};
+          const membershipDoc = await db.collection('users').doc(uid).collection('classes').doc(currentClassId).get();
+          if (!membershipDoc.exists) return null;
+          const directory = directoryDoc.data() || {};
           return { uid, name: String(directory.studentName || 'Student').trim() };
         }));
         assignmentClassRoster = members.filter(Boolean).sort((a,b) => a.name.localeCompare(b.name, undefined, {sensitivity:'base'}));
