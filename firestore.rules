@@ -130,7 +130,10 @@ service cloud.firestore {
       }
 
       match /classes/{classId} {
-        allow read: if isOwner(uid);
+        allow read: if isOwner(uid)
+          || (isTeacher() && (classId == 'MB1'
+            || (exists(/databases/$(database)/documents/classes/$(classId))
+              && get(/databases/$(database)/documents/classes/$(classId)).data.ownerTeacherId == request.auth.uid)));
 
         function membershipAssignmentMatchesClass() {
           return request.resource.data.assignmentId is string
@@ -222,15 +225,6 @@ service cloud.firestore {
         );
 
       allow delete: if false;
-    }
-
-    // Teachers may read membership records only for a class they own; MB1 is the shared built-in class.
-    // A classId equality constraint is required by the collection-group roster query.
-    match /{path=**}/classes/{classId} {
-      allow read: if isTeacher() && resource.data.classId == classId
-        && (classId == 'MB1'
-          || (exists(/databases/$(database)/documents/classes/$(classId))
-            && get(/databases/$(database)/documents/classes/$(classId)).data.ownerTeacherId == request.auth.uid));
     }
 
     // Collection-group reads are limited to the signed-in student's own email.
