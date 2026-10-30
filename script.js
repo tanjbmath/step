@@ -1394,9 +1394,10 @@
 
         // Grant dashboard access only to the selected members of the active class.
         const selectedMembers = assignmentClassRoster.filter(student => selectedAssignmentStudentIds.has(student.uid));
-        for (let offset = 0; offset < selectedMembers.length; offset += 150) {
+        for (let offset = 0; offset < selectedMembers.length; offset += 15) {
+          // Firestore security rules cap document-access calls across a batch at 20.
           const batch = db.batch();
-          selectedMembers.slice(offset, offset + 150).forEach(student => {
+          selectedMembers.slice(offset, offset + 15).forEach(student => {
             const assignmentRef = db.collection('assignments').doc(docId);
             const studentRef = assignmentRef.collection('students').doc(student.uid);
             const classMembershipRef = db.collection('users').doc(student.uid).collection('classes').doc(currentClassId);
