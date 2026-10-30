@@ -565,8 +565,8 @@
         showToast('Only the teacher who created this class can delete it.', 'error'); return;
       }
       const typed = window.prompt(
-        'PERMANENT DELETION\\n\\nThis will delete class "' + target.name +
-        '", all its assignments, student canvases, submitted work, help requests, and saved files. This cannot be undone.\\n\\nTo confirm, type DELETE in capital letters:'
+        'PERMANENT DELETION\n\nThis will delete class "' + target.name +
+        '", all its assignments, student canvases, submitted work, help requests, and saved files. This cannot be undone.\n\nTo confirm, type DELETE in capital letters:'
       );
       if (typed !== 'DELETE') {
         showToast('Class deletion cancelled. No data was deleted.', 'info'); return;
