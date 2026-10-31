@@ -4193,9 +4193,6 @@ async function loadAssignmentProgressCounts(assignment) {
       if (!signedInUser || currentSubmissionStatus !== 'completed' || activeHelpRequestId) return;
       try {
         const ref = peerHelpRequestRef(requestId);
-        const ownerSnapshot = await peerHelpOwnerRef(requestId).get({ source: 'server' });
-        if (!ownerSnapshot.exists || !ownerSnapshot.data().requesterUid) throw new Error('The requester record could not be found.');
-        const requesterUid = ownerSnapshot.data().requesterUid;
         const previousStudentId = studentId;
         const previousInspectingStudentId = inspectingStudentId;
         await db.runTransaction(async transaction => {
@@ -4213,6 +4210,10 @@ async function loadAssignmentProgressCounts(assignment) {
           });
           transaction.update(lockRef, { status: 'helping', helperUid: signedInUser.uid, updatedAt: now });
         });
+        // Resolve the private requester mapping only after this user owns the active help session.
+        const ownerSnapshot = await peerHelpOwnerRef(requestId).get({ source: 'server' });
+        if (!ownerSnapshot.exists || !ownerSnapshot.data().requesterUid) throw new Error('The requester record could not be found.');
+        const requesterUid = ownerSnapshot.data().requesterUid;
         const snapshot = await ref.get();
         activeHelpRequestId = requestId;
         activeHelpRequestData = { ...snapshot.data(), previousStudentId, previousInspectingStudentId };
