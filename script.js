@@ -3655,32 +3655,45 @@ async function loadAssignmentProgressCounts(assignment) {
                 copiedHelpResults.add(requestDoc.id);
                 try {
                   const slideIndex = Number(data.slideIndex || 0);
-                  const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${slideIndex}`).get();
-                  if (!slideDoc.exists || !slideDoc.data().canvasData) throw new Error('The saved help canvas was not found.');
-                  await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
-                    .collection('slides').doc(`slide_${slideIndex}`)
-                    .set({ canvasData: slideDoc.data().canvasData, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), peerHelpRequestId: requestDoc.id }, { merge: true });
-                  // Auto-complete after the requester canvas is safely updated; no Thanks action is needed.
-                  await db.runTransaction(async transaction => {
-                    const latestRequest = await transaction.get(requestsRef.doc(requestDoc.id));
-                    const lockRef = peerHelpLockRef(data.workKey);
-                    const latestLock = await transaction.get(lockRef);
-                    if (latestRequest.exists && latestRequest.data().status === 'submitted') {
-                      const completedAt = firebase.firestore.FieldValue.serverTimestamp();
-                      transaction.update(requestsRef.doc(requestDoc.id), { status: 'acknowledged', completedAt, updatedAt: completedAt });
-                      if (latestLock.exists && latestLock.data().status === 'submitted') transaction.update(lockRef, { status: 'acknowledged', updatedAt: completedAt });
-                    }
-                  });
+                  let refreshedCanvasData = null;
+                  if (data.requestMode === 'teacher') {
+                    // Teacher Help writes annotations directly to the student's slide.
+                    // Do not overwrite that work with the original request snapshot.
+                    const completedAt = firebase.firestore.FieldValue.serverTimestamp();
+                    await db.runTransaction(async transaction => {
+                      const requestRef = requestsRef.doc(requestDoc.id);
+                      const latestRequest = await transaction.get(requestRef);
+                      const lockRef = peerHelpLockRef(data.workKey);
+                      const latestLock = await transaction.get(lockRef);
+                      if (latestRequest.exists && latestRequest.data().status === 'submitted') {
+                        transaction.update(requestRef, { status: 'acknowledged', completedAt, updatedAt: completedAt });
+                        if (latestLock.exists && latestLock.data().status === 'submitted') transaction.update(lockRef, { status: 'acknowledged', updatedAt: completedAt });
+                      }
+                    });
+                  } else {
+                    const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${slideIndex}`).get();
+                    if (!slideDoc.exists || !slideDoc.data().canvasData) throw new Error('The saved help canvas was not found.');
+                    refreshedCanvasData = slideDoc.data().canvasData;
+                    await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
+                      .collection('slides').doc(`slide_${slideIndex}`)
+                      .set({ canvasData: refreshedCanvasData, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), peerHelpRequestId: requestDoc.id }, { merge: true });
+                    // Auto-complete only after the helper's annotations are safely copied.
+                    await db.runTransaction(async transaction => {
+                      const latestRequest = await transaction.get(requestsRef.doc(requestDoc.id));
+                      const lockRef = peerHelpLockRef(data.workKey);
+                      const latestLock = await transaction.get(lockRef);
+                      if (latestRequest.exists && latestRequest.data().status === 'submitted') {
+                        const completedAt = firebase.firestore.FieldValue.serverTimestamp();
+                        transaction.update(requestsRef.doc(requestDoc.id), { status: 'acknowledged', completedAt, updatedAt: completedAt });
+                        if (latestLock.exists && latestLock.data().status === 'submitted') transaction.update(lockRef, { status: 'acknowledged', updatedAt: completedAt });
+                      }
+                    });
+                  }
                   item.status = 'acknowledged';
-                  // Switch the requester back to the exact slide just updated and
-                  // force a fresh subscription so the visible canvas matches Firestore.
                   currentSlideIndex = slideIndex;
                   updateSlideNavigationUI();
                   if (!activeHelpRequestId) {
                     loadCurrentSlideData();
-                    // Reuse the help-slide data already fetched above, avoiding an extra
-                    // Firestore read while immediately painting the saved result.
-                    const refreshedCanvasData = slideDoc.data().canvasData;
                     if (refreshedCanvasData && !isDrawing) {
                       const refreshedImage = new Image();
                       refreshedImage.onload = () => {
@@ -3692,6 +3705,9 @@ async function loadAssignmentProgressCounts(assignment) {
                       refreshedImage.src = refreshedCanvasData;
                     }
                   }
+                  const workspaceSubtext = document.getElementById('workspaceSubtext');
+                  if (workspaceSubtext) workspaceSubtext.textContent = '✓ HELP FULFILLED — Your helper has finished. The annotations are ready on your canvas.';
+                  showToast('Help fulfilled! Your helper has finished and your canvas is ready.', 'success');
                 } catch (err) {
                   copiedHelpResults.delete(requestDoc.id);
                   console.error('Could not apply peer annotations to requester canvas:', err);
