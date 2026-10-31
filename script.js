@@ -3761,11 +3761,26 @@ async function loadAssignmentProgressCounts(assignment) {
         question.className = 'text-sm font-semibold text-slate-800 whitespace-pre-wrap';
         question.textContent = item.question || 'Your help request';
         const status = document.createElement('p');
-        status.className = 'text-xs text-slate-500 mt-1';
-        status.textContent = item.status === 'helping' ? 'Someone is helping — your canvas is locked temporarily.' :
-          item.status === 'submitted' || item.status === 'acknowledged' ? 'Help completed. You can continue working.' :
-          item.status === 'cancelled' ? 'You cancelled this request. You can continue working.' :
-          item.status === 'expired' ? 'Request expired. You can continue working.' : 'Waiting for an eligible peer.';
+        status.className = 'text-xs mt-2 font-semibold';
+        if (item.status === 'helping') {
+          status.classList.add('text-amber-700');
+          status.textContent = 'Someone is helping — your canvas is temporarily locked.';
+        } else if (item.status === 'submitted') {
+          status.classList.add('text-sky-700');
+          status.textContent = 'The helper has submitted their work. Applying the annotations…';
+        } else if (item.status === 'acknowledged') {
+          status.className = 'mt-2 inline-flex items-center rounded-full bg-emerald-100 border border-emerald-300 px-3 py-1 text-xs font-bold text-emerald-800';
+          status.textContent = '✓ Help fulfilled — annotations added to your canvas. You can continue working.';
+        } else if (item.status === 'cancelled') {
+          status.classList.add('text-slate-500');
+          status.textContent = 'You cancelled this request. You can continue working.';
+        } else if (item.status === 'expired') {
+          status.classList.add('text-slate-500');
+          status.textContent = 'Request expired. You can continue working.';
+        } else {
+          status.classList.add('text-slate-500');
+          status.textContent = 'Waiting for an eligible peer.';
+        }
         card.append(question, status);
         if (item.status === 'pending') {
           const actions = document.createElement('div');
