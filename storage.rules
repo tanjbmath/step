@@ -36,5 +36,35 @@ service firebase.storage {
       allow delete: if isAssignmentStudent(assignmentId, studentUid)
         || isAssignmentTeacher(assignmentId);
     }
+
+    // Peer Help images are shared by the requester and the assigned helper.
+    // The opaque request ID keeps the requester's identity out of the Storage path.
+    match /peer-help/{assignmentId}/{requestId}/{fileName} {
+      function helpRequestPath() {
+        return /databases/(default)/documents/assignments/$(assignmentId)/helpRequests/$(requestId);
+      }
+      function isPeerHelpRequester() {
+        return signedIn()
+          && firestore.exists(/databases/(default)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId))
+          && firestore.get(/databases/(default)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId)).data.requesterUid == request.auth.uid
+          && firestore.get(helpRequestPath()).data.status in ['submitted', 'acknowledged'];
+      }
+      function isAssignedPeerHelper() {
+        return signedIn()
+          && firestore.exists(helpRequestPath())
+          && firestore.get(helpRequestPath()).data.helperUid == request.auth.uid
+          && firestore.get(helpRequestPath()).data.status in ['helping', 'submitted', 'acknowledged'];
+      }
+      allow read: if isAssignmentTeacher(assignmentId) || isPeerHelpRequester() || isAssignedPeerHelper();
+
+      allow create, update: if (
+          isAssignedPeerHelper()
+          && firestore.get(helpRequestPath()).data.status == 'helping'
+          && request.resource.size < 5 * 1024 * 1024
+          && request.resource.contentType.matches('image/.*')
+        ) || isAssignmentTeacher(assignmentId);
+
+      allow delete: if isAssignmentTeacher(assignmentId);
+    }
   }
 }

@@ -596,6 +596,10 @@ service cloud.firestore {
                   || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired', 'cancelled']
                 )
               )
+              || (
+                !('activeHelpLockKey' in request.resource.data)
+                && getAfter(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired', 'cancelled']
+              )
             )
           ) || ownsAssignment(assignmentId);
 
