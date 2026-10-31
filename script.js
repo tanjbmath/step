@@ -2864,7 +2864,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
       // Helpers must work on the requester's submitted canvas, not their own completed work.
       if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)
-          && !inspectingStudentId) {
+          && (!inspectingStudentId || activeHelpMode === 'helper')) {
         const requestId = activeHelpRequestId;
         unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('helpRequests').doc(requestId)
@@ -3087,7 +3087,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     undoCanvasBtn.addEventListener('click', () => {
-      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') return;
+      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) return;
       if (!undoStack.length) return;
       const current = captureCanvasState();
       if (current) redoStack.push(current);
@@ -3096,7 +3096,7 @@ async function loadAssignmentProgressCounts(assignment) {
     });
 
     redoCanvasBtn.addEventListener('click', () => {
-      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') return;
+      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) return;
       if (!redoStack.length) return;
       const current = captureCanvasState();
       if (current) undoStack.push(current);
@@ -3186,7 +3186,7 @@ async function loadAssignmentProgressCounts(assignment) {
     const chooseImageInput = document.getElementById('chooseImageInput');
 
     function canAddImageToCanvas() {
-      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') {
+      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return false;
       }
@@ -3258,7 +3258,7 @@ async function loadAssignmentProgressCounts(assignment) {
     chooseImageInput.addEventListener('change', handleImageFileChange);
 
     document.getElementById('clearCanvasBtn').addEventListener('click', () => {
-      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress') {
+      if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return;
       }
@@ -3514,7 +3514,7 @@ async function loadAssignmentProgressCounts(assignment) {
       // Teachers inspecting a student's submitted work need the full annotation toolbar.
       // Keep the restricted, fixed-colour toolbar only for active help sessions
       // that are not the teacher's normal student-work inspection view.
-      const restrictedHelpMode = helperMode || (teacherMode && !inspectingStudentId);
+      const restrictedHelpMode = teacherMode && !inspectingStudentId;
       // A helper may also have an outstanding request of their own. That request's
       // lock must never disable the canvas while they are actively helping someone else.
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student' && !inspectingStudentId && !helperMode && !teacherMode;
@@ -4271,6 +4271,9 @@ async function loadAssignmentProgressCounts(assignment) {
         activeHelpRequestId = requestId;
         activeHelpRequestData = { ...snapshot.data(), previousStudentId, previousInspectingStudentId };
         activeHelpMode = 'helper';
+        currentColor = '#dc2626';
+        const helperColorPicker = document.getElementById('colorPicker');
+        if (helperColorPicker) helperColorPicker.value = currentColor;
         studentId = requesterUid;
         inspectingStudentId = requesterUid;
         currentSubmissionStatus = 'submitted';
