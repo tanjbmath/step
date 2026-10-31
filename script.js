@@ -3620,37 +3620,62 @@ async function loadAssignmentProgressCounts(assignment) {
                       const latestRequest = await transaction.get(requestRef);
                       const lockRef = peerHelpLockRef(data.workKey);
                       const latestLock = await transaction.get(lockRef);
+                      const requesterStudentRef = db.collection('assignments').doc(assignmentIdForHelp)
+                        .collection('students').doc(signedInUser.uid);
+                      const requesterStudent = await transaction.get(requesterStudentRef);
                       if (latestRequest.exists && latestRequest.data().status === 'submitted') {
                         transaction.update(requestRef, { status: 'acknowledged', completedAt, updatedAt: completedAt });
                         if (latestLock.exists && latestLock.data().status === 'submitted') transaction.update(lockRef, { status: 'acknowledged', updatedAt: completedAt });
+                        if (requesterStudent.exists && requesterStudent.data().activeHelpLockKey === data.workKey) {
+                          transaction.update(requesterStudentRef, { activeHelpLockKey: firebase.firestore.FieldValue.delete() });
+                        }
                       }
                     });
                   } else {
-                    const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${slideIndex}`).get();
-                    if (!slideDoc.exists || !slideDoc.data().canvasData) throw new Error('The saved help canvas was not found.');
-                    refreshedCanvasData = slideDoc.data().canvasData;
-                    await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
-                      .collection('slides').doc(`slide_${slideIndex}`)
-                      .set({
-                        canvasData: refreshedCanvasData,
+                    const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${slideIndex}`).get({ source: 'server' });
+                    if (!slideDoc.exists) throw new Error('The saved help canvas was not found.');
+                    const helpSlideData = slideDoc.data() || {};
+                    const studentSlideRef = db.collection('assignments').doc(assignmentIdForHelp)
+                      .collection('students').doc(signedInUser.uid)
+                      .collection('slides').doc(`slide_${slideIndex}`);
+                    if (helpSlideData.canvasStoragePath) {
+                      // The helper and requester now use the same Storage image. Copy only
+                      // its pointer into the student's slide instead of duplicating image data.
+                      await studentSlideRef.set({
+                        canvasStoragePath: helpSlideData.canvasStoragePath,
+                        canvasData: firebase.firestore.FieldValue.delete(),
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        peerHelpRequestId: requestDoc.id
+                      }, { merge: true });
+                    } else if (helpSlideData.canvasData) {
+                      // Backward compatibility for requests created before the Storage migration.
+                      await studentSlideRef.set({
+                        canvasData: helpSlideData.canvasData,
                         canvasStoragePath: firebase.firestore.FieldValue.delete(),
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                         peerHelpRequestId: requestDoc.id
                       }, { merge: true });
-                    // Use the same server-confirmed student-slide rendering path as Teacher Help.
-                    // This avoids drawing a temporary request image and then immediately replacing
-                    // it with a stale workspace snapshot.
+                    } else {
+                      throw new Error('The saved help canvas has no image or Storage path.');
+                    }
                     await drawLatestStudentHelpCanvas(assignmentIdForHelp, signedInUser.uid, slideIndex, () =>
                       currentAssignmentId === assignmentIdForHelp && currentSlideIndex === slideIndex);
                     // Auto-complete only after the helper's annotations are safely copied.
                     await db.runTransaction(async transaction => {
-                      const latestRequest = await transaction.get(requestsRef.doc(requestDoc.id));
+                      const requestRef = requestsRef.doc(requestDoc.id);
+                      const latestRequest = await transaction.get(requestRef);
                       const lockRef = peerHelpLockRef(data.workKey);
                       const latestLock = await transaction.get(lockRef);
+                      const requesterStudentRef = db.collection('assignments').doc(assignmentIdForHelp)
+                        .collection('students').doc(signedInUser.uid);
+                      const requesterStudent = await transaction.get(requesterStudentRef);
                       if (latestRequest.exists && latestRequest.data().status === 'submitted') {
                         const completedAt = firebase.firestore.FieldValue.serverTimestamp();
-                        transaction.update(requestsRef.doc(requestDoc.id), { status: 'acknowledged', completedAt, updatedAt: completedAt });
+                        transaction.update(requestRef, { status: 'acknowledged', completedAt, updatedAt: completedAt });
                         if (latestLock.exists && latestLock.data().status === 'submitted') transaction.update(lockRef, { status: 'acknowledged', updatedAt: completedAt });
+                        if (requesterStudent.exists && requesterStudent.data().activeHelpLockKey === data.workKey) {
+                          transaction.update(requesterStudentRef, { activeHelpLockKey: firebase.firestore.FieldValue.delete() });
+                        }
                       }
                     });
                   }
@@ -4213,6 +4238,21 @@ async function loadAssignmentProgressCounts(assignment) {
           teacherAnnotatedAt: now,
           teacherAnnotatedBy: signedInUser?.uid || null
         }, { merge: true });
+      } else if (activeHelpMode === 'helper') {
+        // Store peer annotations in Firebase Storage, just like the requester's normal
+        // submitted canvas. The request slide document keeps only a Storage pointer.
+        const storagePath = `peer-help/${currentAssignmentId}/${activeHelpRequestId}/slide_${currentSlideIndex}.jpg`;
+        await storage.ref(storagePath).putString(dataUrl, 'data_url', {
+          contentType: 'image/jpeg',
+          cacheControl: 'private, max-age=0, no-cache'
+        });
+        await db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(activeHelpRequestId)
+          .collection('slides').doc(`slide_${currentSlideIndex}`)
+          .set({
+            canvasStoragePath: storagePath,
+            canvasData: firebase.firestore.FieldValue.delete(),
+            updatedAt: now
+          }, { merge: true });
       } else {
         await db.collection('assignments').doc(currentAssignmentId).collection('helpRequests').doc(activeHelpRequestId)
           .collection('slides').doc(`slide_${currentSlideIndex}`)
