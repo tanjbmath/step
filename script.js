@@ -4060,11 +4060,30 @@ async function loadAssignmentProgressCounts(assignment) {
         try {
           await commitRequest(requestedMode);
         } catch (err) {
+          // Keep the original denial visible: the teacher-mode retry can fail for
+          // the same underlying rule issue and otherwise hides the first error.
+          console.warn('Peer Help initial batch was rejected.', {
+            code: err && err.code ? err.code : null,
+            message: err && err.message ? err.message : String(err),
+            assignmentId: currentAssignmentId,
+            requestId: requestRef.id,
+            requestedMode
+          });
           // If the teacher toggled Peer Help off while this student page was open,
           // safely fall back to a teacher-only request without adding a read.
           if (requestedMode !== 'peer') throw err;
           finalMode = 'teacher';
-          await commitRequest('teacher');
+          try {
+            await commitRequest('teacher');
+          } catch (fallbackErr) {
+            console.error('Peer Help teacher-mode fallback batch was also rejected.', {
+              code: fallbackErr && fallbackErr.code ? fallbackErr.code : null,
+              message: fallbackErr && fallbackErr.message ? fallbackErr.message : String(fallbackErr),
+              assignmentId: currentAssignmentId,
+              requestId: requestRef.id
+            });
+            throw fallbackErr;
+          }
         }
         document.getElementById('askForHelpModal').classList.add('hidden');
         document.getElementById('askForHelpForm').reset();
