@@ -2773,8 +2773,25 @@ async function loadAssignmentProgressCounts(assignment) {
       if (slideData.canvasData) {
         drawImageSource(slideData.canvasData);
       } else if (slideData.canvasStoragePath && storage) {
-        storage.ref(slideData.canvasStoragePath).getDownloadURL()
+        const storagePath = slideData.canvasStoragePath;
+        const authUid = firebase.auth?.().currentUser?.uid || signedInUser?.uid || null;
+        console.info('Peer Help archived canvas Storage read starting:', {
+          assignmentId: currentAssignmentId,
+          requestId: activeHelpRequestId || null,
+          slideIndex: currentSlideIndex,
+          storagePath,
+          authUid,
+          projectId: firebase.app().options.projectId || null,
+          storageBucket: storage.app?.options?.storageBucket || null
+        });
+        storage.ref(storagePath).getDownloadURL()
           .then(url => {
+            console.info('Peer Help archived canvas Storage read authorised:', {
+              storagePath,
+              authUid,
+              projectId: firebase.app().options.projectId || null,
+              storageBucket: storage.app?.options?.storageBucket || null
+            });
             if (!isCurrent()) return;
             const separator = url.includes('?') ? '&' : '?';
             drawImageSource(url + separator + 'v=' + encodeURIComponent(
@@ -2783,7 +2800,20 @@ async function loadAssignmentProgressCounts(assignment) {
                 : Date.now()
             ));
           })
-          .catch(err => console.warn('Could not load archived canvas from Storage:', err));
+          .catch(err => {
+            console.error('Peer Help archived canvas Storage read failed:', {
+              storagePath,
+              authUid,
+              assignmentId: currentAssignmentId,
+              requestId: activeHelpRequestId || null,
+              projectId: firebase.app().options.projectId || null,
+              storageBucket: storage.app?.options?.storageBucket || null,
+              code: err?.code || null,
+              message: err?.message || String(err),
+              error: err
+            });
+            console.warn('Could not load archived canvas from Storage:', err);
+          });
       }
     }
 
@@ -4029,6 +4059,22 @@ async function loadAssignmentProgressCounts(assignment) {
         const canvasData = exportCanvasJpeg();
         const commitRequest = async mode => {
           const batch = db.batch();
+          const batchDiagnostics = [
+            { operation: 'set help request', path: requestRef.path },
+            { operation: 'set requester owner index', path: db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners').doc(requestRef.id).path },
+            { operation: 'set request slide', path: requestRef.collection('slides').doc(`slide_${currentSlideIndex}`).path },
+            { operation: 'set help lock', path: peerHelpLockRef(workKey).path },
+            { operation: 'set help refresh signal', path: db.collection('assignments').doc(currentAssignmentId).collection('helpRefresh').doc('state').path },
+            { operation: 'update assignment student lock', path: db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid).path }
+          ];
+          console.info('Peer Help request batch prepared:', {
+            assignmentId: currentAssignmentId,
+            requestId: requestRef.id,
+            requestMode: mode,
+            authUid: firebase.auth?.().currentUser?.uid || signedInUser?.uid || null,
+            projectId: firebase.app().options.projectId || null,
+            operations: batchDiagnostics
+          });
           batch.set(requestRef, {
             requestId: requestRef.id,
             question: question.trim().slice(0, 500),
@@ -4055,7 +4101,28 @@ async function loadAssignmentProgressCounts(assignment) {
           batch.set(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid), {
             activeHelpLockKey: workKey
           }, { merge: true });
-          await batch.commit();
+          try {
+            await batch.commit();
+            console.info('Peer Help request batch committed:', {
+              assignmentId: currentAssignmentId,
+              requestId: requestRef.id,
+              requestMode: mode,
+              operationCount: batchDiagnostics.length
+            });
+          } catch (err) {
+            console.error('Peer Help request batch commit failed:', {
+              assignmentId: currentAssignmentId,
+              requestId: requestRef.id,
+              requestMode: mode,
+              authUid: firebase.auth?.().currentUser?.uid || signedInUser?.uid || null,
+              projectId: firebase.app().options.projectId || null,
+              operations: batchDiagnostics,
+              code: err?.code || null,
+              message: err?.message || String(err),
+              error: err
+            });
+            throw err;
+          }
         };
         try {
           await commitRequest(requestedMode);
