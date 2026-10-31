@@ -46,7 +46,8 @@ service firebase.storage {
       function isPeerHelpRequester() {
         return signedIn()
           && firestore.exists(/databases/(default)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId))
-          && firestore.get(/databases/(default)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId)).data.requesterUid == request.auth.uid;
+          && firestore.get(/databases/(default)/documents/assignments/$(assignmentId)/helpRequestOwners/$(requestId)).data.requesterUid == request.auth.uid
+          && firestore.get(helpRequestPath()).data.status in ['submitted', 'acknowledged'];
       }
       function isAssignedPeerHelper() {
         return signedIn()
