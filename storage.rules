@@ -36,9 +36,9 @@ service firebase.storage {
     }
 
     match /student-work/{assignmentId}/{studentUid}/{fileName} {
-      allow read: if isAssignmentStudent(assignmentId, studentUid)
-        || isActivePeerHelper(assignmentId, studentUid)
-        || isAssignmentTeacher(assignmentId);
+      allow read: if isAssignmentTeacher(assignmentId)
+  || isAssignmentStudent(assignmentId, studentUid)
+  || isActivePeerHelper(assignmentId, studentUid);
 
       allow create, update: if (
           (isAssignmentStudent(assignmentId, studentUid)
