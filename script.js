@@ -3607,7 +3607,6 @@ async function loadAssignmentProgressCounts(assignment) {
               updatePeerHelpControls();
               if (!copiedHelpResults.has(requestDoc.id) && !copyingHelpResults.has(requestDoc.id)) {
                 copyingHelpResults.add(requestDoc.id);
-                copiedHelpResults.add(requestDoc.id);
                 try {
                   const slideIndex = Number(data.slideIndex || 0);
                   let refreshedCanvasData = null;
@@ -3638,7 +3637,10 @@ async function loadAssignmentProgressCounts(assignment) {
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                         peerHelpRequestId: requestDoc.id
                       }, { merge: true });
-                    await drawHelpCanvasAndWait(refreshedCanvasData, () =>
+                    // Use the same server-confirmed student-slide rendering path as Teacher Help.
+                    // This avoids drawing a temporary request image and then immediately replacing
+                    // it with a stale workspace snapshot.
+                    await drawLatestStudentHelpCanvas(assignmentIdForHelp, signedInUser.uid, slideIndex, () =>
                       currentAssignmentId === assignmentIdForHelp && currentSlideIndex === slideIndex);
                     // Auto-complete only after the helper's annotations are safely copied.
                     await db.runTransaction(async transaction => {
@@ -3652,12 +3654,14 @@ async function loadAssignmentProgressCounts(assignment) {
                       }
                     });
                   }
+                  copiedHelpResults.add(requestDoc.id);
                   // Notify every active dashboard after the requester has safely acknowledged completion.
                   await bumpHelpRefreshSignal(currentAssignmentId);
                   item.status = 'acknowledged';
                   currentSlideIndex = slideIndex;
                   updateSlideNavigationUI();
-                  if (!activeHelpRequestId && data.requestMode !== 'teacher') loadCurrentSlideData();
+                  // The confirmed student-slide render above is authoritative; do not
+                  // immediately reload and clear/replace it from a second listener.
                   const workspaceSubtext = document.getElementById('workspaceSubtext');
                   if (workspaceSubtext) workspaceSubtext.textContent = '✓ HELP FULFILLED — Your helper has finished. The annotations are ready on your canvas.';
                   showToast('Help fulfilled! Your helper has finished and your canvas is ready.', 'success');
