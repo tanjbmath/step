@@ -521,7 +521,10 @@ service cloud.firestore {
       // Private mapping lets the requester and teacher identify the request without exposing identity to peers.
       match /helpRequestOwners/{requestId} {
         allow get, list: if ownsAssignment(assignmentId)
-          || (signedIn() && resource.data.requesterUid == request.auth.uid);
+          || (signedIn() && resource.data.requesterUid == request.auth.uid)
+          || (signedIn()
+            && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.status == 'helping'
+            && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.helperUid == request.auth.uid);
 
         allow create: if signedIn()
           && isAssignmentMember(assignmentId, request.auth.uid)
