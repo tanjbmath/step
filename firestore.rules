@@ -593,7 +593,7 @@ service cloud.firestore {
                 'activeHelpLockKey' in request.resource.data
                 && (
                   request.resource.data.activeHelpLockKey == resource.data.activeHelpLockKey
-                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired', 'cancelled']
+                  || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired', 'cancelled']
                 )
               )
               || (
@@ -610,7 +610,7 @@ service cloud.firestore {
               // If the parent assignment has already been removed, allow cleanup of orphaned work.
               !exists(/databases/$(database)/documents/assignments/$(assignmentId))
               || !('activeHelpLockKey' in resource.data)
-              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['acknowledged', 'expired', 'cancelled']
+              || get(helpLockPath(assignmentId, resource.data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired', 'cancelled']
             )
           );
 
