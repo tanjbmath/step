@@ -2827,17 +2827,32 @@ async function loadAssignmentProgressCounts(assignment) {
       const assignmentId = currentAssignmentId;
       const slideIndex = currentSlideIndex;
       setCanvasLoadReady(false);
+      let snapshotLoadSequence = 0;
       const finishLoad = (slideData, isCurrent) => {
-        if (!isCurrent() || loadToken !== canvasLoadSequence) return;
+        const snapshotToken = ++snapshotLoadSequence;
+        const isLatest = () => loadToken === canvasLoadSequence
+          && snapshotToken === snapshotLoadSequence && isCurrent();
+        if (!isLatest()) return;
         redrawBackgroundAndCanvas();
         if (!slideData) {
-          setCanvasLoadReady(true);
+          if (['helper', 'teacher'].includes(activeHelpMode)) {
+            setCanvasLoadReady(false);
+            showToast('The original student canvas is missing. Help cannot continue without it.', 'error');
+          } else {
+            setCanvasLoadReady(true);
+          }
           return;
         }
-        drawCanvasFromSlideData(slideData, isCurrent).then(loaded => {
-          if (loaded && isCurrent() && loadToken === canvasLoadSequence) setCanvasLoadReady(true);
+        if (['helper', 'teacher'].includes(activeHelpMode)
+            && !slideData.canvasData && !slideData.canvasStoragePath) {
+          setCanvasLoadReady(false);
+          showToast('The original student canvas is empty. Editing and submission are paused to protect the student’s work.', 'error');
+          return;
+        }
+        drawCanvasFromSlideData(slideData, isLatest).then(loaded => {
+          if (loaded && isLatest()) setCanvasLoadReady(true);
         }).catch(err => {
-          if (loadToken === canvasLoadSequence) {
+          if (isLatest()) {
             setCanvasLoadReady(false);
             console.error('Saved canvas load guard blocked editing:', err);
             showToast('Your saved canvas could not be loaded. Editing and submission are paused to protect your existing work. Reload and try again.', 'error');
