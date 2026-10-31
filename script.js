@@ -3637,6 +3637,9 @@ async function loadAssignmentProgressCounts(assignment) {
                     const studentSlideRef = db.collection('assignments').doc(assignmentIdForHelp)
                       .collection('students').doc(signedInUser.uid)
                       .collection('slides').doc(`slide_${slideIndex}`);
+                    // Detach the previous slide snapshot before replacing its image pointer;
+                    // an older in-flight image load must not paint over the completed annotations.
+                    if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
                     if (helpSlideData.canvasStoragePath) {
                       // The helper and requester now use the same Storage image. Copy only
                       // its pointer into the student's slide instead of duplicating image data.
@@ -3659,6 +3662,8 @@ async function loadAssignmentProgressCounts(assignment) {
                     }
                     await drawLatestStudentHelpCanvas(assignmentIdForHelp, signedInUser.uid, slideIndex, () =>
                       currentAssignmentId === assignmentIdForHelp && currentSlideIndex === slideIndex);
+                    // Reattach to the now-updated student slide, not the stale pre-copy snapshot.
+                    if (!activeHelpRequestId) loadCurrentSlideData();
                     // Auto-complete only after the helper's annotations are safely copied.
                     await db.runTransaction(async transaction => {
                       const requestRef = requestsRef.doc(requestDoc.id);
@@ -4215,9 +4220,12 @@ async function loadAssignmentProgressCounts(assignment) {
     async function saveActiveHelpCanvasNow() {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
       clearTimeout(saveTimeout);
-      // Finish any queued helper autosave before publishing the final Storage image.
-      // Otherwise an older Firestore canvasData write could race and replace its pointer.
-      if (activeHelpMode === 'helper') await flushCanvasSaveToFirestore();
+      // Cancel queued Firestore draft writes and wait for any write already in flight.
+      // The final image is uploaded below; do not force another large data URL into Firestore.
+      if (activeHelpMode === 'helper') {
+        canvasSaveDirty = false;
+        await canvasSaveInFlight.catch(() => {});
+      }
       const dataUrl = exportCanvasJpeg();
       const now = firebase.firestore.FieldValue.serverTimestamp();
       if (activeHelpMode === 'teacher' && inspectingStudentId) {
