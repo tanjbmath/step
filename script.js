@@ -3715,9 +3715,6 @@ async function loadAssignmentProgressCounts(assignment) {
         teacherRequesterLabelCache.clear();
         requesterHelpLock = false;
         peerHelpListeningAssignmentId = currentAssignmentId;
-      } else if (unsubHelpRequests) {
-        unsubHelpRequests();
-        unsubHelpRequests = null;
       }
 
       const panel = document.getElementById('peerHelpPanel');
@@ -3734,13 +3731,26 @@ async function loadAssignmentProgressCounts(assignment) {
 
       const requestsRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequests');
       if (currentUserRole === 'teacher') {
+        if (unsubHelpRequests) {
+          unsubHelpRequests();
+          unsubHelpRequests = null;
+        }
         startTeacherHelpMonitor(currentAssignmentId);
       } else if (currentSubmissionStatus === 'completed' && isPeerHelpEnabled()) {
-        // Fetch only while Peer Help is enabled; no assignment-wide student listener.
-        requestsRef.where('status', '==', 'pending').where('requestMode', '==', 'peer').limit(10).get().then(snapshot => {
-          renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-        }).catch(err => console.warn('Available Peer Help fetch:', err));
+        // One bounded live query so eligible peers see new requests without refreshing.
+        // Keep the same listener across workspace re-renders to avoid repeat reads.
+        if (!unsubHelpRequests) {
+          unsubHelpRequests = requestsRef.where('status', '==', 'pending')
+            .where('requestMode', '==', 'peer').limit(10)
+            .onSnapshot(snapshot => {
+              renderPeerHelpRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+            }, err => console.warn('Available Peer Help listener:', err));
+        }
       } else {
+        if (unsubHelpRequests) {
+          unsubHelpRequests();
+          unsubHelpRequests = null;
+        }
         const list = document.getElementById('peerHelpRequestList');
         if (list) list.innerHTML = '<p class="text-sm text-slate-500">Only students who completed this assignment can help. Your requests will appear here.</p>';
       }
