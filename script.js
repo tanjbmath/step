@@ -3643,6 +3643,14 @@ async function loadAssignmentProgressCounts(assignment) {
             if (!requestDoc.exists) return;
             const data = requestDoc.data();
             const item = { id: requestDoc.id, ...data, isOwned: true };
+            // Render every server status immediately. Completion processing below may await
+            // canvas reads/writes; the requester log must not wait for that work to finish.
+            const previousItem = ownedHelpRequestState.get(item.id);
+            const statusRank = { pending: 0, helping: 1, submitted: 2, acknowledged: 3, expired: 3, cancelled: 3 };
+            if (!previousItem || (statusRank[item.status] ?? 0) >= (statusRank[previousItem.status] ?? 0)) {
+              ownedHelpRequestState.set(item.id, item);
+            }
+            renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
             if (data.status === 'helping') {
               requesterHelpLock = true;
               updatePeerHelpControls();
