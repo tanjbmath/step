@@ -3643,6 +3643,8 @@ async function loadAssignmentProgressCounts(assignment) {
                       }
                     });
                   }
+                  // Notify every active dashboard after the requester has safely acknowledged completion.
+                  await bumpHelpRefreshSignal(currentAssignmentId);
                   item.status = 'acknowledged';
                   currentSlideIndex = slideIndex;
                   updateSlideNavigationUI();
