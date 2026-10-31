@@ -3609,7 +3609,6 @@ async function loadAssignmentProgressCounts(assignment) {
                 copyingHelpResults.add(requestDoc.id);
                 try {
                   const slideIndex = Number(data.slideIndex || 0);
-                  let refreshedCanvasData = null;
                   if (data.requestMode === 'teacher') {
                     // Read and display the committed teacher-annotated slide before acknowledging.
                     await drawLatestStudentHelpCanvas(currentAssignmentId, signedInUser.uid, slideIndex, () =>
@@ -4216,6 +4215,9 @@ async function loadAssignmentProgressCounts(assignment) {
     async function saveActiveHelpCanvasNow() {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
       clearTimeout(saveTimeout);
+      // Finish any queued helper autosave before publishing the final Storage image.
+      // Otherwise an older Firestore canvasData write could race and replace its pointer.
+      if (activeHelpMode === 'helper') await flushCanvasSaveToFirestore();
       const dataUrl = exportCanvasJpeg();
       const now = firebase.firestore.FieldValue.serverTimestamp();
       if (activeHelpMode === 'teacher' && inspectingStudentId) {
