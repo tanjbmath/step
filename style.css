@@ -15,6 +15,10 @@
       transform-origin: 0 0;
       touch-action: none;
       max-width: none;
+      /* Keep the true writable page edge visible while the canvas is zoomed or panned. */
+      background: #ffffff;
+      outline: 3px solid #2563eb;
+      outline-offset: -3px;
     }
     .eraser-cursor {
       position: absolute;
