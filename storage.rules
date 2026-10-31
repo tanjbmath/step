@@ -17,6 +17,16 @@ service firebase.storage {
         && firestore.exists(/databases/(default)/documents/assignments/$(assignmentId)/students/$(studentUid));
     }
 
+    function isActivePeerHelper(assignmentId, studentUid) {
+      let studentPath = /databases/(default)/documents/assignments/$(assignmentId)/students/$(studentUid);
+      return signedIn()
+        && firestore.exists(studentPath)
+        && ('activeHelpLockKey' in firestore.get(studentPath).data)
+        && firestore.exists(/databases/(default)/documents/assignments/$(assignmentId)/helpLocks/$(firestore.get(studentPath).data.activeHelpLockKey))
+        && firestore.get(/databases/(default)/documents/assignments/$(assignmentId)/helpLocks/$(firestore.get(studentPath).data.activeHelpLockKey)).data.status == 'helping'
+        && firestore.get(/databases/(default)/documents/assignments/$(assignmentId)/helpLocks/$(firestore.get(studentPath).data.activeHelpLockKey)).data.helperUid == request.auth.uid;
+    }
+
     // Allow only the owning teacher to enumerate files under an assignment.
     // This recursive match is needed when listAll() starts at student-work/{assignmentId}/.
     match /student-work/{assignmentId}/{nestedPath=**} {
@@ -25,10 +35,12 @@ service firebase.storage {
 
     match /student-work/{assignmentId}/{studentUid}/{fileName} {
       allow read: if isAssignmentStudent(assignmentId, studentUid)
+        || isActivePeerHelper(assignmentId, studentUid)
         || isAssignmentTeacher(assignmentId);
 
       allow create, update: if (
-          isAssignmentStudent(assignmentId, studentUid)
+          (isAssignmentStudent(assignmentId, studentUid)
+            || isActivePeerHelper(assignmentId, studentUid))
           && request.resource.size < 5 * 1024 * 1024
           && request.resource.contentType.matches('image/.*')
         ) || isAssignmentTeacher(assignmentId);

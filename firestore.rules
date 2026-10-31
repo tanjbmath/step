@@ -9,6 +9,16 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    function isActivePeerHelper(assignmentId, studentUid) {
+      let studentPath = /databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid);
+      return signedIn()
+        && exists(studentPath)
+        && ('activeHelpLockKey' in get(studentPath).data)
+        && exists(/databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(get(studentPath).data.activeHelpLockKey))
+        && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(get(studentPath).data.activeHelpLockKey)).data.status == 'helping'
+        && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpLocks/$(get(studentPath).data.activeHelpLockKey)).data.helperUid == request.auth.uid;
+    }
+
     function isTeacher() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
@@ -511,7 +521,10 @@ service cloud.firestore {
       // Private mapping lets the requester and teacher identify the request without exposing identity to peers.
       match /helpRequestOwners/{requestId} {
         allow get, list: if ownsAssignment(assignmentId)
-          || (signedIn() && resource.data.requesterUid == request.auth.uid);
+          || (signedIn() && resource.data.requesterUid == request.auth.uid)
+          || (signedIn()
+            && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.status == 'helping'
+            && get(/databases/$(database)/documents/assignments/$(assignmentId)/helpRequests/$(requestId)).data.helperUid == request.auth.uid);
 
         allow create: if signedIn()
           && isAssignmentMember(assignmentId, request.auth.uid)
@@ -615,7 +628,8 @@ service cloud.firestore {
           );
 
         match /slides/{slideId} {
-          allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
+          allow read: if isOwner(studentUid) || ownsAssignment(assignmentId)
+            || isActivePeerHelper(assignmentId, studentUid);
           allow create, update: if (
               isOwner(studentUid)
               && isAssignmentMember(assignmentId, studentUid)
@@ -623,6 +637,13 @@ service cloud.firestore {
                 !('activeHelpLockKey' in get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data)
                 || get(helpLockPath(assignmentId, get(/databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid)).data.activeHelpLockKey)).data.status != 'helping'
               )
+            ) || (
+              isActivePeerHelper(assignmentId, studentUid)
+              && resource != null
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'canvasStoragePath', 'canvasData', 'updatedAt',
+                'peerHelpAnnotatedAt', 'peerHelpAnnotatedBy', 'peerHelpRequestId'
+              ])
             ) || ownsAssignment(assignmentId);
           allow delete: if ownsAssignment(assignmentId)
             || (
