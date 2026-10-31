@@ -2738,6 +2738,20 @@ async function loadAssignmentProgressCounts(assignment) {
     document.addEventListener('fullscreenchange', updateFullscreenButton);
 
     let currentBgImage = null;
+    // A helper must not draw or submit until the source slide image is fully decoded.
+    let canvasLoadReady = true;
+    let canvasLoadSequence = 0;
+
+    function setCanvasLoadReady(ready) {
+      canvasLoadReady = Boolean(ready);
+      const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
+        && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
+      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked) ? 'auto' : 'none';
+      const helperSubmit = document.getElementById('submitPeerHelpBtn');
+      const teacherSubmit = document.getElementById('teacherSubmitPeerHelpBtn');
+      if (helperSubmit) helperSubmit.disabled = !canvasLoadReady;
+      if (teacherSubmit) teacherSubmit.disabled = !canvasLoadReady;
+    }
 
     function redrawBackgroundAndCanvas() {
       // Start every slide with an opaque white writing surface. Without this,
@@ -2762,24 +2776,26 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
-    function drawCanvasFromSlideData(slideData, isCurrent = () => true) {
-      if (!slideData) return;
-      const drawImageSource = src => {
+    async function drawCanvasFromSlideData(slideData, isCurrent = () => true) {
+      if (!slideData) return true;
+      const drawImageSource = src => new Promise((resolve, reject) => {
         const img = new Image();
         // Storage download URLs are cross-origin. Set CORS mode before src so
-        // drawing the archived canvas does not taint mainCanvas and block
-        // getImageData()/toDataURL() during annotation and save.
+        // drawing the archived canvas does not taint mainCanvas.
         img.crossOrigin = 'anonymous';
         img.onload = () => {
-          if (!isDrawing && isCurrent()) ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
+          if (!isCurrent()) return resolve(false);
+          if (isDrawing) return reject(new Error('Canvas became active before its saved image finished loading.'));
+          ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
+          resolve(true);
         };
-        img.onerror = () => console.warn('Could not load saved canvas image. Check Firebase Storage CORS configuration.');
+        img.onerror = () => reject(new Error('Could not load the saved canvas image. Check Firebase Storage CORS configuration.'));
         img.src = src;
-      };
+      });
+
       // Prefer the live canvas while work is in progress; archived submissions use Storage.
-      if (slideData.canvasData) {
-        drawImageSource(slideData.canvasData);
-      } else if (slideData.canvasStoragePath && storage) {
+      if (slideData.canvasData) return drawImageSource(slideData.canvasData);
+      if (slideData.canvasStoragePath && storage) {
         const storagePath = slideData.canvasStoragePath;
         const authUid = firebase.auth?.().currentUser?.uid || signedInUser?.uid || null;
         console.info('Peer Help archived canvas Storage read starting:', {
@@ -2791,80 +2807,104 @@ async function loadAssignmentProgressCounts(assignment) {
           projectId: firebase.app().options.projectId || null,
           storageBucket: storage.app?.options?.storageBucket || null
         });
-        storage.ref(storagePath).getDownloadURL()
-          .then(url => {
-            console.info('Peer Help archived canvas Storage read authorised:', {
-              storagePath,
-              authUid,
-              projectId: firebase.app().options.projectId || null,
-              storageBucket: storage.app?.options?.storageBucket || null
-            });
-            if (!isCurrent()) return;
-            const separator = url.includes('?') ? '&' : '?';
-            drawImageSource(url + separator + 'v=' + encodeURIComponent(
-              slideData.updatedAt && typeof slideData.updatedAt.toMillis === 'function'
-                ? slideData.updatedAt.toMillis()
-                : Date.now()
-            ));
-          })
-          .catch(err => {
-            console.error('Peer Help archived canvas Storage read failed:', {
-              storagePath,
-              authUid,
-              assignmentId: currentAssignmentId,
-              requestId: activeHelpRequestId || null,
-              projectId: firebase.app().options.projectId || null,
-              storageBucket: storage.app?.options?.storageBucket || null,
-              code: err?.code || null,
-              message: err?.message || String(err),
-              error: err
-            });
-            console.warn('Could not load archived canvas from Storage:', err);
-          });
+        const url = await storage.ref(storagePath).getDownloadURL();
+        if (!isCurrent()) return false;
+        console.info('Peer Help archived canvas Storage read authorised:', {
+          storagePath, authUid,
+          projectId: firebase.app().options.projectId || null,
+          storageBucket: storage.app?.options?.storageBucket || null
+        });
+        const separator = url.includes('?') ? '&' : '?';
+        const version = slideData.updatedAt && typeof slideData.updatedAt.toMillis === 'function'
+          ? slideData.updatedAt.toMillis() : Date.now();
+        return drawImageSource(url + separator + 'v=' + encodeURIComponent(version));
       }
+      return true;
     }
 
     function loadCurrentSlideData() {
       if (!currentAssignmentId) return;
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
+      const loadToken = ++canvasLoadSequence;
+      const assignmentId = currentAssignmentId;
+      const slideIndex = currentSlideIndex;
+      setCanvasLoadReady(false);
+      let snapshotLoadSequence = 0;
+      const finishLoad = (slideData, isCurrent) => {
+        const snapshotToken = ++snapshotLoadSequence;
+        const isLatest = () => loadToken === canvasLoadSequence
+          && snapshotToken === snapshotLoadSequence && isCurrent();
+        if (!isLatest()) return;
+        redrawBackgroundAndCanvas();
+        if (!slideData) {
+          if (['helper', 'teacher'].includes(activeHelpMode)) {
+            setCanvasLoadReady(false);
+            showToast('The original student canvas is missing. Help cannot continue without it.', 'error');
+          } else {
+            setCanvasLoadReady(true);
+          }
+          return;
+        }
+        if (['helper', 'teacher'].includes(activeHelpMode)
+            && !slideData.canvasData && !slideData.canvasStoragePath) {
+          setCanvasLoadReady(false);
+          showToast('The original student canvas is empty. Editing and submission are paused to protect the student’s work.', 'error');
+          return;
+        }
+        drawCanvasFromSlideData(slideData, isLatest).then(loaded => {
+          if (loaded && isLatest()) setCanvasLoadReady(true);
+        }).catch(err => {
+          if (isLatest()) {
+            setCanvasLoadReady(false);
+            console.error('Saved canvas load guard blocked editing:', err);
+            showToast('Your saved canvas could not be loaded. Editing and submission are paused to protect your existing work. Reload and try again.', 'error');
+          }
+        });
+      };
 
       // Helpers must work on the requester's submitted canvas, not their own completed work.
       if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)
           && !inspectingStudentId) {
         const requestId = activeHelpRequestId;
-        const assignmentId = currentAssignmentId;
-        const slideIndex = currentSlideIndex;
         unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('helpRequests').doc(requestId)
           .collection('slides').doc(`slide_${slideIndex}`)
           .onSnapshot(doc => {
             if (isDrawing || activeHelpRequestId !== requestId) return;
-            redrawBackgroundAndCanvas();
-            if (doc.exists) drawCanvasFromSlideData(doc.data() || {}, () =>
+            finishLoad(doc.exists ? (doc.data() || {}) : null, () =>
               !isDrawing && activeHelpRequestId === requestId
               && currentAssignmentId === assignmentId && currentSlideIndex === slideIndex);
-          }, err => console.warn("Help request slide listener notice:", err));
+          }, err => {
+            if (loadToken === canvasLoadSequence) setCanvasLoadReady(false);
+            console.warn("Help request slide listener notice:", err);
+            showToast('Could not load the original help canvas. Editing and submission are paused.', 'error');
+          });
         return;
       }
 
       const targetStudentId = inspectingStudentId || studentId;
-      if (!targetStudentId) return;
+      if (!targetStudentId) {
+        setCanvasLoadReady(true);
+        return;
+      }
       if (db) {
-        const assignmentId = currentAssignmentId;
-        const slideIndex = currentSlideIndex;
         unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('students').doc(targetStudentId)
           .collection('slides').doc(`slide_${slideIndex}`)
           .onSnapshot(doc => {
             if (isDrawing) return;
-            redrawBackgroundAndCanvas();
-            if (doc.exists) drawCanvasFromSlideData(doc.data() || {}, () =>
+            finishLoad(doc.exists ? (doc.data() || {}) : null, () =>
               !isDrawing && currentAssignmentId === assignmentId
               && currentSlideIndex === slideIndex
               && (inspectingStudentId || studentId) === targetStudentId);
-          }, err => console.warn("Slide listener notice:", err));
+          }, err => {
+            if (loadToken === canvasLoadSequence) setCanvasLoadReady(false);
+            console.warn("Slide listener notice:", err);
+            showToast('Could not load the saved canvas. Editing is paused to protect existing work.', 'error');
+          });
       } else {
         redrawBackgroundAndCanvas();
+        setCanvasLoadReady(true);
       }
     }
 
@@ -3340,6 +3380,10 @@ async function loadAssignmentProgressCounts(assignment) {
     }
     // Advanced Pointer Events for Stylus / Apple Pencil + Palm Rejection Toggle
     function handlePointerDown(e) {
+      if (!canvasLoadReady) {
+        showToast('Please wait for the saved canvas to finish loading before drawing.', 'info');
+        return;
+      }
       // Completed students may draw while helping; their own assignment remains read-only.
       if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress'
           && !['helper', 'teacher'].includes(activeHelpMode)) {
@@ -3508,7 +3552,9 @@ async function loadAssignmentProgressCounts(assignment) {
         penTool.classList.add('bg-indigo-600', 'text-white');
         penTool.classList.remove('bg-white', 'text-slate-700');
       }
-      if (mainCanvas) mainCanvas.style.pointerEvents = requesterIsLocked ? 'none' : 'auto';
+      if (mainCanvas) mainCanvas.style.pointerEvents = (requesterIsLocked || !canvasLoadReady) ? 'none' : 'auto';
+      if (submitHelper) submitHelper.disabled = !canvasLoadReady;
+      if (submitTeacher) submitTeacher.disabled = !canvasLoadReady;
       const askButton = document.getElementById('askForHelpBtn');
       if (askButton) askButton.innerHTML = isPeerHelpEnabled() ? '<i class="fa-solid fa-handshake-angle mr-1"></i> Peer Help' : '<i class="fa-solid fa-chalkboard-teacher mr-1"></i> Teacher Help';
       updateSubmitAssignmentButton();
@@ -4351,6 +4397,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     async function saveActiveHelpCanvasNow() {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
+      if (!canvasLoadReady) throw new Error('The original student canvas has not finished loading. Nothing was saved.');
       clearTimeout(saveTimeout);
       saveTimeout = null;
       // Cancel queued Firestore draft writes and wait for any write already in flight.
@@ -4395,6 +4442,10 @@ async function loadAssignmentProgressCounts(assignment) {
 
     async function submitPeerHelp(requestId, asTeacher = false) {
       if (!signedInUser || !currentAssignmentId) return;
+      if (!canvasLoadReady) {
+        showToast('The original student canvas is still loading or failed to load. Help cannot be submitted yet.', 'error');
+        return;
+      }
       const helperButton = document.getElementById('submitPeerHelpBtn');
       const teacherButton = document.getElementById('teacherSubmitPeerHelpBtn');
       if (helperButton) helperButton.disabled = true;
