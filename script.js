@@ -3704,7 +3704,7 @@ async function loadAssignmentProgressCounts(assignment) {
                 } catch (err) {
                   copiedHelpResults.delete(requestDoc.id);
                   console.error('Could not apply peer annotations to requester canvas:', { stage: applyStage, code: err?.code || null, message: err?.message || String(err), error: err });
-                  const errorCode = err?.code ? String(err.code).replace(/^firestore\\//, '').replace(/^storage\\//, '') : 'unknown';
+                  const errorCode = err?.code ? String(err.code).replace(/^firestore\//, '').replace(/^storage\//, '') : 'unknown';
                   showToast(`Help submitted, but annotation failed at: ${applyStage}. Error: ${errorCode} — ${err?.message || 'No further details'}`, 'error');
                 } finally {
                   copyingHelpResults.delete(requestDoc.id);
