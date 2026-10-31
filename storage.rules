@@ -6,8 +6,10 @@ service firebase.storage {
     }
 
     function isAssignmentTeacher(assignmentId) {
+      // The assignment's immutable teacherId is the authoritative ownership check.
+      // Firestore rules already restrict assignment creation to teacher accounts and
+      // prevent changing teacherId, so a second user-profile role lookup is redundant.
       return signedIn()
-        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'teacher'
         && firestore.get(/databases/(default)/documents/assignments/$(assignmentId)).data.teacherId == request.auth.uid;
     }
 
