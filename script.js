@@ -2744,7 +2744,9 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function setCanvasLoadReady(ready) {
       canvasLoadReady = Boolean(ready);
-      if (mainCanvas) mainCanvas.style.pointerEvents = canvasLoadReady ? 'auto' : 'none';
+      const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
+        && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
+      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked) ? 'auto' : 'none';
       const helperSubmit = document.getElementById('submitPeerHelpBtn');
       const teacherSubmit = document.getElementById('teacherSubmitPeerHelpBtn');
       if (helperSubmit) helperSubmit.disabled = !canvasLoadReady;
