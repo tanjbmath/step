@@ -3607,13 +3607,16 @@ async function loadAssignmentProgressCounts(assignment) {
               updatePeerHelpControls();
               if (!copiedHelpResults.has(requestDoc.id) && !copyingHelpResults.has(requestDoc.id)) {
                 copyingHelpResults.add(requestDoc.id);
+                let applyStage = 'starting';
                 try {
                   const slideIndex = Number(data.slideIndex || 0);
                   if (data.requestMode === 'teacher') {
+                    applyStage = 'loading teacher-annotated slide';
                     // Read and display the committed teacher-annotated slide before acknowledging.
                     await drawLatestStudentHelpCanvas(currentAssignmentId, signedInUser.uid, slideIndex, () =>
                       currentAssignmentId === assignmentIdForHelp && currentSlideIndex === slideIndex);
                     const completedAt = firebase.firestore.FieldValue.serverTimestamp();
+                    applyStage = 'confirming help completion';
                     await db.runTransaction(async transaction => {
                       const requestRef = requestsRef.doc(requestDoc.id);
                       const latestRequest = await transaction.get(requestRef);
@@ -3631,6 +3634,7 @@ async function loadAssignmentProgressCounts(assignment) {
                       }
                     });
                   } else {
+                    applyStage = 'reading helper annotation record';
                     const slideDoc = await requestsRef.doc(requestDoc.id).collection('slides').doc(`slide_${slideIndex}`).get({ source: 'server' });
                     if (!slideDoc.exists) throw new Error('The saved help canvas was not found.');
                     const helpSlideData = slideDoc.data() || {};
@@ -3641,6 +3645,7 @@ async function loadAssignmentProgressCounts(assignment) {
                     // an older in-flight image load must not paint over the completed annotations.
                     if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
                     if (helpSlideData.canvasStoragePath) {
+                      applyStage = 'updating your slide with the annotation image';
                       // The helper and requester now use the same Storage image. Copy only
                       // its pointer into the student's slide instead of duplicating image data.
                       await studentSlideRef.set({
@@ -3660,6 +3665,7 @@ async function loadAssignmentProgressCounts(assignment) {
                     } else {
                       throw new Error('The saved help canvas has no image or Storage path.');
                     }
+                    applyStage = 'loading the annotated image onto your canvas';
                     await drawLatestStudentHelpCanvas(assignmentIdForHelp, signedInUser.uid, slideIndex, () =>
                       currentAssignmentId === assignmentIdForHelp && currentSlideIndex === slideIndex);
                     // Reattach to the now-updated student slide, not the stale pre-copy snapshot.
@@ -3685,6 +3691,7 @@ async function loadAssignmentProgressCounts(assignment) {
                   }
                   copiedHelpResults.add(requestDoc.id);
                   // Notify every active dashboard after the requester has safely acknowledged completion.
+                  applyStage = 'refreshing help status';
                   await bumpHelpRefreshSignal(currentAssignmentId);
                   item.status = 'acknowledged';
                   currentSlideIndex = slideIndex;
@@ -3696,8 +3703,9 @@ async function loadAssignmentProgressCounts(assignment) {
                   showToast('Help fulfilled! Your helper has finished and your canvas is ready.', 'success');
                 } catch (err) {
                   copiedHelpResults.delete(requestDoc.id);
-                  console.error('Could not apply peer annotations to requester canvas:', err);
-                  showToast('Help was submitted, but the annotated canvas could not be copied. You can continue working; inform your teacher if needed.', 'error');
+                  console.error('Could not apply peer annotations to requester canvas:', { stage: applyStage, code: err?.code || null, message: err?.message || String(err), error: err });
+                  const errorCode = err?.code ? String(err.code).replace(/^firestore\\//, '').replace(/^storage\\//, '') : 'unknown';
+                  showToast(`Help submitted, but annotation failed at: ${applyStage}. Error: ${errorCode} — ${err?.message || 'No further details'}`, 'error');
                 } finally {
                   copyingHelpResults.delete(requestDoc.id);
                   requesterHelpLock = false;
