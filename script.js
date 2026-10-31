@@ -2730,7 +2730,12 @@ async function loadAssignmentProgressCounts(assignment) {
     let currentBgImage = null;
 
     function redrawBackgroundAndCanvas() {
+      // Start every slide with an opaque white writing surface. Without this,
+      // an untouched canvas is transparent and shows the wrapper's grey pan area,
+      // making a newly opened assignment look disabled or not yet loaded.
       ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
 
       const slideConfig = currentAssignmentData?.slides?.[currentSlideIndex];
       if (slideConfig?.bgUrl && !slideConfig.bgUrl.startsWith('data:image/')) {
