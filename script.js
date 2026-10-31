@@ -2042,7 +2042,14 @@ async function loadAssignmentProgressCounts(assignment) {
             // Resolve the archived image URL so the dashboard thumbnail remains visible.
             if (!previewSource && slideData.canvasStoragePath && storage) {
               try {
-                previewSource = await storage.ref(slideData.canvasStoragePath).getDownloadURL();
+                const downloadUrl = await storage.ref(slideData.canvasStoragePath).getDownloadURL();
+                // Teacher annotations and peer annotations overwrite the same Storage object.
+                // Firebase returns the same download URL/token, so force the browser to fetch
+                // the newest image instead of reusing a previously cached blank canvas.
+                const version = slideData.updatedAt && typeof slideData.updatedAt.toMillis === 'function'
+                  ? slideData.updatedAt.toMillis()
+                  : Date.now();
+                previewSource = downloadUrl + (downloadUrl.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(version);
               } catch (err) {
                 console.warn('Could not load archived student preview:', err);
               }
