@@ -795,6 +795,8 @@
     let unsubOwnedHelpRequests = null;
     const ownedHelpRequestListeners = new Map();
     const finishedOwnedHelpRequestListeners = new Set();
+    // Locally created requests are protected from an early empty owner-index snapshot.
+    const locallyOwnedHelpRequestIds = new Set();
     let unsubTeacherHelpRequests = null;
     const teacherRequesterLabelCache = new Map();
     let unsubActiveHelpSession = null;
@@ -3707,6 +3709,7 @@ async function loadAssignmentProgressCounts(assignment) {
         ownedHelpRequestListeners.forEach(unsub => unsub());
         ownedHelpRequestListeners.clear();
         finishedOwnedHelpRequestListeners.clear();
+        locallyOwnedHelpRequestIds.clear();
         ownedHelpRequestState.clear();
         loadClearedOwnedHelpLogIds();
         teacherRequesterLabelCache.clear();
@@ -3747,8 +3750,11 @@ async function loadAssignmentProgressCounts(assignment) {
       const ownersRef = db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners');
       unsubOwnedHelpRequests = ownersRef.where('requesterUid', '==', signedInUser.uid).onSnapshot(snapshot => {
         const ownerIds = new Set(snapshot.docs.map(d => d.id));
+        ownerIds.forEach(requestId => locallyOwnedHelpRequestIds.delete(requestId));
         ownedHelpRequestListeners.forEach((unsub, requestId) => {
-          if (!ownerIds.has(requestId)) {
+          // The owner index may briefly emit its initial empty snapshot after a request
+          // was committed. Keep this tab's direct listener until the index confirms it.
+          if (!ownerIds.has(requestId) && !locallyOwnedHelpRequestIds.has(requestId)) {
             unsub();
             ownedHelpRequestListeners.delete(requestId);
             ownedHelpRequestState.delete(requestId);
@@ -3758,7 +3764,7 @@ async function loadAssignmentProgressCounts(assignment) {
           if (ownedHelpRequestListeners.has(ownerDoc.id) || finishedOwnedHelpRequestListeners.has(ownerDoc.id)) return;
           attachOwnedHelpRequestListener(ownerDoc.id, requestsRef);
         });
-        if (!snapshot.docs.length) {
+        if (!snapshot.docs.length && locallyOwnedHelpRequestIds.size === 0 && ownedHelpRequestState.size === 0) {
           hasOpenOwnedHelpRequest = false;
           renderOwnedPeerHelpRequests([]);
           updatePeerHelpControls();
@@ -3924,6 +3930,8 @@ async function loadAssignmentProgressCounts(assignment) {
         document.getElementById('askForHelpModal').classList.add('hidden');
         document.getElementById('askForHelpForm').reset();
         showToast(finalMode === 'peer' ? 'Peer Help request sent. Your identity is hidden from other students.' : 'Teacher Help request sent.', 'success');
+        // Protect this request from an initial empty owner-index snapshot in this tab.
+        locallyOwnedHelpRequestIds.add(requestRef.id);
         startPeerHelpListeners();
         // Subscribe directly to this request immediately; do not wait for the owner-index snapshot.
         attachOwnedHelpRequestListener(requestRef.id, requestsRef);
