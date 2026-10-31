@@ -320,6 +320,27 @@ service cloud.firestore {
         allow delete: if ownsAssignment(assignmentId);
       }
 
+      // A minimal revision signal tells active dashboards to re-fetch help windows from the server.
+      // It contains no requester identity or request details.
+      match /helpRefresh/{signalId} {
+        allow get, list: if signalId == 'state'
+          && (ownsAssignment(assignmentId) || isAssignmentMember(assignmentId, request.auth.uid));
+
+        allow create: if signalId == 'state'
+          && (ownsAssignment(assignmentId) || isAssignmentMember(assignmentId, request.auth.uid))
+          && request.resource.data.keys().hasOnly(['revision', 'updatedAt'])
+          && request.resource.data.revision == 1
+          && request.resource.data.updatedAt == request.time;
+
+        allow update: if signalId == 'state'
+          && (ownsAssignment(assignmentId) || isAssignmentMember(assignmentId, request.auth.uid))
+          && request.resource.data.keys().hasOnly(['revision', 'updatedAt'])
+          && request.resource.data.revision == resource.data.revision + 1
+          && request.resource.data.updatedAt == request.time;
+
+        allow delete: if ownsAssignment(assignmentId);
+      }
+
       // Peer Help requests expose the question and workflow state, never the requester's UID/name.
       match /helpRequests/{requestId} {
         allow get: if ownsAssignment(assignmentId)
