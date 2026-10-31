@@ -4220,6 +4220,7 @@ async function loadAssignmentProgressCounts(assignment) {
     async function saveActiveHelpCanvasNow() {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
       clearTimeout(saveTimeout);
+      saveTimeout = null;
       // Cancel queued Firestore draft writes and wait for any write already in flight.
       // The final image is uploaded below; do not force another large data URL into Firestore.
       if (activeHelpMode === 'helper') {
