@@ -63,6 +63,17 @@
 
     try {
       firebase.initializeApp(firebaseConfig);
+
+      // Firebase App Check (reCAPTCHA Enterprise). Enforcement remains disabled
+      // in Firebase Console until legitimate traffic has been verified.
+      const appCheck = firebase.appCheck();
+      appCheck.activate(
+        new firebase.appCheck.ReCaptchaEnterpriseProvider(
+          "6LeyDwsuAAAAAI0Te98q0tBRWNHUx4agRILAae4x"
+        ),
+        true
+      );
+
       db = firebase.firestore();
       auth = firebase.auth();
       storage = firebase.storage();
