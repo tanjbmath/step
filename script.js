@@ -792,7 +792,6 @@
       }
     }
     let unsubHelpRequests = null;
-    let unsubHelpRefreshSignal = null;
     let unsubOwnedHelpRequests = null;
     const ownedHelpRequestListeners = new Map();
     const finishedOwnedHelpRequestListeners = new Set();
@@ -3796,8 +3795,7 @@ async function loadAssignmentProgressCounts(assignment) {
                   copiedHelpResults.add(requestDoc.id);
                   // Notify every active dashboard after the requester has safely acknowledged completion.
                   applyStage = 'refreshing help status';
-                  await bumpHelpRefreshSignal(currentAssignmentId);
-                  item.status = 'acknowledged';
+                            item.status = 'acknowledged';
                   currentSlideIndex = slideIndex;
                   updateSlideNavigationUI();
                   // The confirmed student-slide render above is authoritative; do not
@@ -3844,85 +3842,11 @@ async function loadAssignmentProgressCounts(assignment) {
       ownedHelpRequestListeners.set(requestId, unsub);
     }
 
-    async function refreshHelpWindowsFromServer(assignmentId) {
-      if (!db || !signedInUser || !assignmentId || currentAssignmentId !== assignmentId) return;
-      const assignmentRef = db.collection('assignments').doc(assignmentId);
-      const requestsRef = assignmentRef.collection('helpRequests');
-
-      if (currentUserRole === 'teacher') {
-        const snapshot = await requestsRef.where('status', 'in', ['pending', 'helping', 'submitted'])
-          .limit(25).get({ source: 'server' });
-        if (currentAssignmentId !== assignmentId || currentUserRole !== 'teacher') return;
-        const requests = await Promise.all(snapshot.docs.map(async doc => {
-          const item = { id: doc.id, ...doc.data() };
-          if (teacherRequesterLabelCache.has(doc.id)) {
-            item.requesterLabel = teacherRequesterLabelCache.get(doc.id);
-            return item;
-          }
-          try {
-            const owner = await assignmentRef.collection('helpRequestOwners').doc(doc.id).get({ source: 'server' });
-            let label = 'Student';
-            if (owner.exists && owner.data().requesterUid) {
-              const student = await assignmentRef.collection('students').doc(owner.data().requesterUid).get({ source: 'server' });
-              label = student.exists ? (student.data().name || 'Student') : 'Student';
-            }
-            teacherRequesterLabelCache.set(doc.id, label);
-            item.requesterLabel = label;
-          } catch (err) {
-            console.warn('Could not refresh teacher requester label:', err);
-          }
-          return item;
-        }));
-        renderPeerHelpRequests(requests, 'teacher');
-        return;
-      }
-
-      if (currentSubmissionStatus === 'completed' && isPeerHelpEnabled()) {
-        const snapshot = await requestsRef.where('status', '==', 'pending')
-          .where('requestMode', '==', 'peer').limit(10).get({ source: 'server' });
-        if (currentAssignmentId === assignmentId && currentUserRole !== 'teacher') {
-          renderPeerHelpRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        }
-      }
-
-      const ownerSnapshot = await assignmentRef.collection('helpRequestOwners')
-        .where('requesterUid', '==', signedInUser.uid).get({ source: 'server' });
-      if (currentAssignmentId !== assignmentId || !signedInUser) return;
-      const refreshedItems = await Promise.all(ownerSnapshot.docs.map(async ownerDoc => {
-        const requestDoc = await requestsRef.doc(ownerDoc.id).get({ source: 'server' });
-        if (!requestDoc.exists) return null;
-        return { id: requestDoc.id, ...requestDoc.data(), isOwned: true };
-      }));
-      refreshedItems.filter(Boolean).forEach(item => {
-        const previous = ownedHelpRequestState.get(item.id);
-        const rank = { pending: 0, helping: 1, submitted: 2, acknowledged: 3, expired: 3, cancelled: 3 };
-        if (!previous || (rank[item.status] ?? 0) >= (rank[previous.status] ?? 0)) {
-          ownedHelpRequestState.set(item.id, item);
-        }
-        if (item.status === 'helping') requesterHelpLock = true;
-        if (['acknowledged', 'expired', 'cancelled'].includes(item.status)) requesterHelpLock = false;
-        // Ensure a direct listener exists for completion processing and future transitions.
-        attachOwnedHelpRequestListener(item.id, requestsRef);
-      });
-      renderOwnedPeerHelpRequests(Array.from(ownedHelpRequestState.values()));
-      updatePeerHelpControls();
-    }
-
-    async function bumpHelpRefreshSignal(assignmentId) {
-      if (!db || !assignmentId) return;
-      await db.collection('assignments').doc(assignmentId).collection('helpRefresh').doc('state')
-        .set({
-          revision: firebase.firestore.FieldValue.increment(1),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-    }
-
     function startPeerHelpListeners() {
       if (!db || !signedInUser || !currentAssignmentId) return;
       const assignmentChanged = peerHelpListeningAssignmentId !== currentAssignmentId;
       if (assignmentChanged) {
         if (unsubHelpRequests) { unsubHelpRequests(); unsubHelpRequests = null; }
-        if (unsubHelpRefreshSignal) { unsubHelpRefreshSignal(); unsubHelpRefreshSignal = null; }
         if (unsubOwnedHelpRequests) { unsubOwnedHelpRequests(); unsubOwnedHelpRequests = null; }
         if (unsubTeacherHelpRequests) { unsubTeacherHelpRequests(); unsubTeacherHelpRequests = null; }
         ownedHelpRequestListeners.forEach(unsub => unsub());
@@ -3950,16 +3874,6 @@ async function loadAssignmentProgressCounts(assignment) {
 
       const assignmentRef = db.collection('assignments').doc(currentAssignmentId);
       const requestsRef = assignmentRef.collection('helpRequests');
-      // A lightweight assignment signal triggers an explicit server read after request creation/submission.
-      // This is a fallback to the document listeners, not a page reload or a broad assignment listener.
-      if (!unsubHelpRefreshSignal) {
-        unsubHelpRefreshSignal = assignmentRef.collection('helpRefresh').doc('state').onSnapshot(snapshot => {
-          if (!snapshot.exists) return;
-          refreshHelpWindowsFromServer(currentAssignmentId).catch(err => {
-            console.warn('Help window server refresh failed:', err);
-          });
-        }, err => console.warn('Help refresh signal listener:', err));
-      }
       if (currentUserRole === 'teacher') {
         if (unsubHelpRequests) {
           unsubHelpRequests();
@@ -4138,7 +4052,6 @@ async function loadAssignmentProgressCounts(assignment) {
             { operation: 'set requester owner index', path: db.collection('assignments').doc(currentAssignmentId).collection('helpRequestOwners').doc(requestRef.id).path },
             { operation: 'set request slide', path: requestRef.collection('slides').doc(`slide_${currentSlideIndex}`).path },
             { operation: 'set help lock', path: peerHelpLockRef(workKey).path },
-            { operation: 'set help refresh signal', path: db.collection('assignments').doc(currentAssignmentId).collection('helpRefresh').doc('state').path },
             { operation: 'update assignment student lock', path: db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid).path }
           ];
           console.info('Peer Help request batch prepared:', {
@@ -4169,9 +4082,6 @@ async function loadAssignmentProgressCounts(assignment) {
             updatedAt: now
           });
           batch.set(peerHelpLockRef(workKey), { requestId: requestRef.id, workKey, status: 'pending', createdAt: now, updatedAt: now });
-          batch.set(db.collection('assignments').doc(currentAssignmentId).collection('helpRefresh').doc('state'), {
-            revision: firebase.firestore.FieldValue.increment(1), updatedAt: now
-          }, { merge: true });
           batch.set(db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid), {
             activeHelpLockKey: workKey
           }, { merge: true });
@@ -4517,7 +4427,6 @@ async function loadAssignmentProgressCounts(assignment) {
           loadCurrentSlideData();
           document.getElementById('workspaceSubtext').textContent = 'Assignment workspace • Your own work remains unchanged';
         }
-        await bumpHelpRefreshSignal(currentAssignmentId);
         showToast(asTeacher ? 'Help session submitted on behalf of the helper.' : 'Help submitted. The requester can now continue working.', 'success');
       } catch (err) {
         console.error('Could not submit Peer Help:', err);
@@ -4542,7 +4451,6 @@ async function loadAssignmentProgressCounts(assignment) {
           transaction.update(ref, { status: 'expired', expiredAt: now, updatedAt: now });
           if (lockDoc.exists) transaction.update(lockRef, { status: 'expired', updatedAt: now });
         });
-        await bumpHelpRefreshSignal(currentAssignmentId);
         showToast('Peer Help request expired.', 'success');
       } catch (err) {
         showToast('Could not expire request: ' + err.message, 'error');
