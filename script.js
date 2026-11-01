@@ -69,7 +69,7 @@
       const appCheck = firebase.appCheck();
       appCheck.activate(
         new firebase.appCheck.ReCaptchaEnterpriseProvider(
-          "6LeyDwsuAAAAAI0Te98q0tBRWNHUx4agRILAae4x"
+          "6LeyDwsuAAAAAMae_2uP4p0XpbQRTjN6v9Iy0E96"
         ),
         true
       );
