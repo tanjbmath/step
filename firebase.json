@@ -5,5 +5,23 @@
   },
   "storage": {
     "rules": "storage.rules"
+  },
+  "hosting": {
+    "target": "stepmath",
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "**/.*",
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/.github/**",
+      "*.md",
+      "worker/**",
+      "wrangler.toml",
+      "firestore.rules",
+      "firestore.indexes.json",
+      "storage.rules"
+    ]
   }
 }
