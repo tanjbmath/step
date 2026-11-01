@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "classwork1314"
+  },
+  "targets": {
+    "classwork1314": {
+      "hosting": {
+        "stepmath": [
+          "stepmath"
+        ]
+      }
+    }
+  }
+}
