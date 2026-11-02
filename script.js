@@ -56,6 +56,8 @@
     let studentSubmissionRecords = [];
     let currentAssignedStudents = [];
     let currentJoinedStudents = [];
+    let teacherInspectionStudents = [];
+    let teacherInspectionIndex = -1;
     let currentSubmissionStatus = 'in-progress';
     let currentAssignedStudentKey = null;
     let unsubAssignedStudents = null;
@@ -1942,6 +1944,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function renderStudentGrid(studentsList) {
+      teacherInspectionStudents = (studentsList || []).filter(student => student.isJoined);
       const grid = document.getElementById('studentsGrid');
       const countBadge = document.getElementById('studentCountBadge');
       
@@ -2130,11 +2133,13 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function openWorkspaceForInspection(stId, stName, status = 'submitted', studentRecord = null) {
+      teacherInspectionIndex = teacherInspectionStudents.findIndex(student => (student.studentUid || student.id) === stId);
       // Remember where the teacher was on the dashboard so Back to Dashboard restores that view.
       teacherDashboardScrollY = window.scrollY || document.documentElement.scrollTop || 0;
       // Live roster previews are unnecessary while inspecting one student's full canvas.
       stopStudentPreviewListeners();
       inspectingStudentId = stId;
+      updateTeacherWorkNavigation();
       saveStepScreenState();
       currentSubmissionStatus = status || 'submitted';
       // Teacher feedback should be visually distinct from the student's own writing.
@@ -2161,6 +2166,43 @@ async function loadAssignmentProgressCounts(assignment) {
       setTool('pen');
       updatePeerHelpControls();
     }
+
+    function updateTeacherWorkNavigation() {
+      const controls = document.getElementById('teacherWorkNavigation');
+      const previous = document.getElementById('previousStudentWorkBtn');
+      const next = document.getElementById('nextStudentWorkBtn');
+      const active = currentUserRole === 'teacher' && Boolean(inspectingStudentId)
+        && teacherInspectionIndex >= 0 && teacherInspectionStudents.length > 0;
+      if (controls) controls.classList.toggle('hidden', !active);
+      if (previous) previous.disabled = !active || teacherInspectionIndex <= 0;
+      if (next) next.disabled = !active || teacherInspectionIndex >= teacherInspectionStudents.length - 1;
+    }
+
+    async function navigateTeacherStudentWork(direction) {
+      if (!inspectingStudentId || currentUserRole !== 'teacher') return;
+      const targetIndex = teacherInspectionIndex + direction;
+      if (targetIndex < 0 || targetIndex >= teacherInspectionStudents.length) return;
+      const target = teacherInspectionStudents[targetIndex];
+      const targetId = target.studentUid || target.id;
+      if (!targetId) return;
+      const previousButton = document.getElementById('previousStudentWorkBtn');
+      const nextButton = document.getElementById('nextStudentWorkBtn');
+      if (previousButton) previousButton.disabled = true;
+      if (nextButton) nextButton.disabled = true;
+      try {
+        // Finish any pending teacher annotation save before changing the student target.
+        await flushCanvasSaveToFirestore();
+        openWorkspaceForInspection(targetId, target.name || target.studentEmail || 'Student',
+          target.status || 'submitted', target);
+      } catch (error) {
+        console.error('Could not save annotations before changing student:', error);
+        showToast('Could not save the current annotations. Student navigation was cancelled.', 'error');
+        updateTeacherWorkNavigation();
+      }
+    }
+
+    document.getElementById('previousStudentWorkBtn')?.addEventListener('click', () => navigateTeacherStudentWork(-1));
+    document.getElementById('nextStudentWorkBtn')?.addEventListener('click', () => navigateTeacherStudentWork(1));
 
     // Pre-fill the session code immediately when a student opens a shared link.
     const initialJoinCode = new URLSearchParams(window.location.search).get('join');
@@ -2616,6 +2658,8 @@ async function loadAssignmentProgressCounts(assignment) {
       if (inspectingStudentId) {
         teacherDashboard.classList.remove('hidden');
         inspectingStudentId = null;
+        teacherInspectionIndex = -1;
+        updateTeacherWorkNavigation();
         // Restore the dashboard at its previous scroll position; do not reload/reset its active view.
         requestAnimationFrame(() => window.scrollTo(0, teacherDashboardScrollY));
       } else if (currentUserRole === 'student') {
