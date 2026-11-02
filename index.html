@@ -338,7 +338,16 @@
         </div>
 
         <!-- Page Navigation -->
-        <div class="slide-navigation flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
+        <div class="flex flex-wrap items-center justify-center gap-2">
+          <div id="teacherWorkNavigation" class="hidden items-center gap-1 bg-indigo-50 p-1 rounded-lg border border-indigo-200">
+            <button id="previousStudentWorkBtn" type="button" class="px-2.5 py-1.5 bg-white hover:bg-indigo-100 text-indigo-700 rounded shadow-sm disabled:opacity-40 disabled:cursor-not-allowed text-xs font-semibold" aria-label="Previous student's work">
+              <i class="fa-solid fa-chevron-left"></i> Previous Student
+            </button>
+            <button id="nextStudentWorkBtn" type="button" class="px-2.5 py-1.5 bg-white hover:bg-indigo-100 text-indigo-700 rounded shadow-sm disabled:opacity-40 disabled:cursor-not-allowed text-xs font-semibold" aria-label="Next student's work">
+              Next Student <i class="fa-solid fa-chevron-right"></i>
+            </button>
+          </div>
+          <div class="slide-navigation flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border border-slate-200">
           <button id="prevSlideBtn" class="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 rounded shadow-sm disabled:opacity-40 disabled:cursor-not-allowed font-medium text-sm">
             <i class="fa-solid fa-chevron-left"></i> Prev
           </button>
@@ -346,6 +355,7 @@
           <button id="nextSlideBtn" class="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 rounded shadow-sm disabled:opacity-40 disabled:cursor-not-allowed font-medium text-sm">
             Next Page <i class="fa-solid fa-chevron-right"></i>
           </button>
+          </div>
         </div>
 
 
