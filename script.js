@@ -2134,12 +2134,12 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function openWorkspaceForInspection(stId, stName, status = 'submitted', studentRecord = null) {
       teacherInspectionIndex = teacherInspectionStudents.findIndex(student => (student.studentUid || student.id) === stId);
-      updateTeacherWorkNavigation();
       // Remember where the teacher was on the dashboard so Back to Dashboard restores that view.
       teacherDashboardScrollY = window.scrollY || document.documentElement.scrollTop || 0;
       // Live roster previews are unnecessary while inspecting one student's full canvas.
       stopStudentPreviewListeners();
       inspectingStudentId = stId;
+      updateTeacherWorkNavigation();
       saveStepScreenState();
       currentSubmissionStatus = status || 'submitted';
       // Teacher feedback should be visually distinct from the student's own writing.
