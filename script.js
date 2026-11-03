@@ -26,6 +26,8 @@
     let teacherAssignmentsUnsubscribe = null;
     // Keep exactly one live preview listener per joined student in the active assignment.
     const studentPreviewUnsubscribers = new Map();
+    const studentPreviewVectorUnsubscribers = new Map();
+    const studentPreviewVectorData = new Map();
     const studentPreviewData = new Map();
     const studentPreviewVersions = new Map();
     let teacherStatsRefreshTimer = null;
@@ -946,7 +948,7 @@
     let studentVectorLoadFailed = false;
     let studentVectorLastWriteAt = 0;
     let studentVectorLoadKey = '';
-    const STUDENT_VECTOR_WRITE_MS = 450;
+    const STUDENT_VECTOR_WRITE_MS = 750;
     const STUDENT_VECTOR_MAX_STROKES = 300;
     const STUDENT_VECTOR_MAX_POINTS = 18000;
     let unsubAnnotations = null;
@@ -1164,7 +1166,9 @@
         width: (activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth)) / mainCanvas.width,
         points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }] };
       localStudentStrokes.push(studentVectorActiveStroke);
-      studentVectorCanvas.setPointerCapture(e.pointerId); renderStudentVectorLayer();
+      studentVectorCanvas.setPointerCapture(e.pointerId);
+      renderStudentVectorLayer();
+      scheduleStudentVectorSave(false);
     }
 
     function handleStudentVectorPointerMove(e) {
@@ -2546,8 +2550,29 @@ async function loadAssignmentProgressCounts(assignment) {
       syncStudentPreviewListeners(studentsList);
     }
 
-    // Keep one live preview listener per joined student while the teacher roster is visible.
-    // Reuse existing listeners across roster rerenders and unsubscribe removed students.
+    function ensureStudentVectorPreviewCanvas(studentUid, key) {
+      const img = document.getElementById('thumb-' + studentUid);
+      const host = img?.parentElement;
+      if (!host) return null;
+      let canvas = host.querySelector('[data-student-vector-preview="' + studentUid + '"]');
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.dataset.studentVectorPreview = studentUid;
+        canvas.width = 400; canvas.height = 300;
+        Object.assign(canvas.style, {
+          position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+          height: '100%', width: 'auto', maxWidth: '100%', aspectRatio: '4 / 3',
+          zIndex: '2', pointerEvents: 'none'
+        });
+        host.appendChild(canvas);
+      }
+      drawStudentStrokesToContext(canvas.getContext('2d'), studentPreviewVectorData.get(key) || [], canvas.width, canvas.height);
+      return canvas;
+    }
+
+    // Keep one base-image and one small vector-document listener per joined student
+    // only while the teacher roster is visible. The vector overlay preserves the live
+    // thumbnail without flattening student handwriting back into Firestore image data.
     function syncStudentPreviewListeners(studentsList) {
       const activeKeys = new Set();
       if (!currentAssignmentId || !db || teacherDashboard.classList.contains('hidden')) {
@@ -2564,6 +2589,18 @@ async function loadAssignmentProgressCounts(assignment) {
         // Roster rerenders replace image elements; reuse the last live or archived preview.
         const cachedPreviewSource = studentPreviewData.get(key);
         if (img && cachedPreviewSource && img.getAttribute('src') !== cachedPreviewSource) img.src = cachedPreviewSource;
+        ensureStudentVectorPreviewCanvas(studentUid, key);
+        if (!studentPreviewVectorUnsubscribers.has(key)) {
+          const vectorUnsubscribe = db.collection('assignments').doc(currentAssignmentId)
+            .collection('students').doc(studentUid).collection('slides').doc('slide_0')
+            .collection('studentDrawings').doc('student')
+            .onSnapshot(doc => {
+              const data = doc.exists ? (doc.data() || {}) : {};
+              studentPreviewVectorData.set(key, Array.isArray(data.strokes) ? data.strokes : []);
+              ensureStudentVectorPreviewCanvas(studentUid, key);
+            }, err => console.warn('Student vector preview listener:', err));
+          studentPreviewVectorUnsubscribers.set(key, vectorUnsubscribe);
+        }
         if (studentPreviewUnsubscribers.has(key)) return;
         const unsubscribe = db.collection('assignments').doc(currentAssignmentId)
           .collection('students').doc(studentUid).collection('slides').doc('slide_0')
@@ -2612,11 +2649,20 @@ async function loadAssignmentProgressCounts(assignment) {
           studentPreviewData.delete(key);
         }
       });
+      studentPreviewVectorUnsubscribers.forEach((unsubscribe, key) => {
+        if (!activeKeys.has(key)) {
+          unsubscribe();
+          studentPreviewVectorUnsubscribers.delete(key);
+          studentPreviewVectorData.delete(key);
+        }
+      });
     }
 
     function stopStudentPreviewListeners() {
       studentPreviewUnsubscribers.forEach(unsubscribe => unsubscribe());
       studentPreviewUnsubscribers.clear();
+      studentPreviewVectorUnsubscribers.forEach(unsubscribe => unsubscribe());
+      studentPreviewVectorUnsubscribers.clear();
     }
 
     // Statistics aggregate every assignment roster, so refresh only while the panel is visible.
