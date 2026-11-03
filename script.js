@@ -750,6 +750,16 @@
       try {
         currentClassId = state.classId || loadActiveClassId();
         selectedClassId = state.selectedClassId || currentClassId;
+        if (state.screen === 'role') {
+          pendingPortalRole = null;
+          workspaceScreen.classList.add('hidden');
+          teacherDashboard.classList.add('hidden');
+          studentJoinScreen.classList.add('hidden');
+          studentHistoryScreen.classList.add('hidden');
+          document.getElementById('classSelectionScreen').classList.add('hidden');
+          roleSelectionScreen.classList.remove('hidden');
+          return true;
+        }
         if (state.screen === 'class-selection') {
           pendingPortalRole = state.pendingRole || state.role || (accountRole === 'teacher' ? 'teacher' : 'student');
           if (pendingPortalRole === 'teacher' && accountRole !== 'teacher') pendingPortalRole = 'student';
