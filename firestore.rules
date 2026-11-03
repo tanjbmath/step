@@ -633,8 +633,10 @@ service cloud.firestore {
           match /annotations/{authorUid} {
             allow read: if isOwner(studentUid) || ownsAssignment(assignmentId)
               || isActivePeerHelper(assignmentId, studentUid);
+            // Teacher and peer helper intentionally write to the same "staff" document.
+            // The teacher may revise the peer helper's strokes without creating a second layer.
             allow create, update: if request.auth != null
-              && authorUid == request.auth.uid
+              && authorUid == 'staff'
               && request.resource.data.authorUid == request.auth.uid
               && request.resource.data.keys().hasOnly(['authorUid', 'role', 'strokes', 'updatedAt'])
               && request.resource.data.strokes is list
@@ -643,7 +645,7 @@ service cloud.firestore {
                 (ownsAssignment(assignmentId) && request.resource.data.role == 'teacher')
                 || (isActivePeerHelper(assignmentId, studentUid) && request.resource.data.role == 'peer')
               );
-            allow delete: if request.auth != null && authorUid == request.auth.uid
+            allow delete: if request.auth != null && authorUid == 'staff'
               && (ownsAssignment(assignmentId) || isActivePeerHelper(assignmentId, studentUid));
           }
           allow create, update: if (
