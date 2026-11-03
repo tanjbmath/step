@@ -943,6 +943,7 @@
     let studentVectorSaveInFlight = Promise.resolve();
     let studentVectorDirty = false;
     let studentVectorLoading = false;
+    let studentVectorLoadFailed = false;
     let studentVectorLastWriteAt = 0;
     let studentVectorLoadKey = '';
     const STUDENT_VECTOR_WRITE_MS = 450;
@@ -1072,7 +1073,7 @@
     function stopStudentVectorListener() {
       if (unsubStudentVectors) { unsubStudentVectors(); unsubStudentVectors = null; }
       if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
-      studentVectorDirty = false; studentVectorLoading = false;
+      studentVectorDirty = false; studentVectorLoading = false; studentVectorLoadFailed = false;
       localStudentStrokes = []; studentVectorActiveStroke = null; studentVectorLoadKey = '';
       if (studentVectorCtx && studentVectorCanvas) studentVectorCtx.clearRect(0, 0, studentVectorCanvas.width, studentVectorCanvas.height);
     }
@@ -1082,7 +1083,7 @@
       const key = [currentAssignmentId, targetUid, currentSlideIndex].join(':');
       if (studentVectorLoadKey === key) return;
       stopStudentVectorListener(); studentVectorLoadKey = key;
-      studentVectorLoading = true;
+      studentVectorLoading = true; studentVectorLoadFailed = false;
       setCanvasLoadReady(canvasBaseLoadReady);
       ensureStudentVectorCanvas();
       unsubStudentVectors = studentVectorSlideRef(targetUid).collection('studentDrawings').doc('student')
@@ -1090,11 +1091,11 @@
           if (studentVectorActiveStroke || studentVectorDirty) return;
           const data = doc.exists ? (doc.data() || {}) : {};
           localStudentStrokes = Array.isArray(data.strokes) ? data.strokes : [];
-          studentVectorLoading = false;
+          studentVectorLoading = false; studentVectorLoadFailed = false;
           renderStudentVectorLayer();
           setCanvasLoadReady(canvasBaseLoadReady);
         }, err => {
-          studentVectorLoading = false;
+          studentVectorLoading = false; studentVectorLoadFailed = true;
           console.warn('Student vector listener failed:', err);
           showToast('Could not load saved handwriting. Editing is paused to protect existing work.', 'error');
           setCanvasLoadReady(false);
@@ -1145,11 +1146,17 @@
       const p = getCanvasCoordinates(e);
       if (activeTool === 'text') {
         const text = prompt('Enter text overlay:'); if (!text) return;
+        if (text.length > 1000 || localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+          showToast('This slide has reached its handwriting limit.', 'error'); return;
+        }
         beginCanvasAction();
         localStudentStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
           x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
           color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
         renderStudentVectorLayer(); scheduleStudentVectorSave(true); return;
+      }
+      if (localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+        showToast('This slide has reached its handwriting limit.', 'error'); return;
       }
       beginCanvasAction();
       studentVectorActiveStroke = { type: 'path', coordinateSpace: 'normalized-v1', tool: activeTool,
@@ -1168,7 +1175,8 @@
       const samples = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
       (samples.length ? samples : [e]).forEach(sample => {
         const p = getCanvasCoordinates(sample, rect);
-        if (studentVectorActiveStroke.points.length < STUDENT_VECTOR_MAX_POINTS) {
+        const totalPoints = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
+        if (totalPoints < STUDENT_VECTOR_MAX_POINTS) {
           studentVectorActiveStroke.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
         }
       });
@@ -3313,7 +3321,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function setCanvasLoadReady(ready) {
       canvasBaseLoadReady = Boolean(ready);
-      canvasLoadReady = canvasBaseLoadReady && !studentVectorLoading;
+      canvasLoadReady = canvasBaseLoadReady && !studentVectorLoading && !studentVectorLoadFailed;
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
         && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
       if (mainCanvas) mainCanvas.style.pointerEvents =
