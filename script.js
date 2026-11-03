@@ -951,7 +951,7 @@
     let studentVectorPreviewMarkerKey = '';
     const STUDENT_VECTOR_WRITE_MS = 2000;
     const STUDENT_VECTOR_MAX_STROKES = 300;
-    const STUDENT_VECTOR_MAX_POINTS = 18000;
+    const STUDENT_VECTOR_MAX_POINTS = 10000;
     let unsubAnnotations = null;
     let annotationRecords = new Map();
     let localAnnotationStrokes = [];
@@ -1169,7 +1169,7 @@
       const p = getCanvasCoordinates(e);
       if (activeTool === 'text') {
         const text = prompt('Enter text overlay:'); if (!text) return;
-        if (text.length > 1000 || localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+        if (text.length > 500 || localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
           showToast('This slide has reached its handwriting limit.', 'error'); return;
         }
         beginCanvasAction();
