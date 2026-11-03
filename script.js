@@ -645,10 +645,18 @@
     // Restore the user's last in-app screen after a browser refresh. sessionStorage
     // keeps this state scoped to the current tab and avoids stale cross-session reopening.
     const STEP_SCREEN_STATE_KEY = 'step_screen_state_v1';
+    const STEP_SCREEN_HISTORY_KEY = 'step_screen_history_v1';
     let restoringStepScreen = false;
+    let navigatingStepHistory = false;
+
+    function getStepScreenKey(state) {
+      if (!state) return '';
+      return [state.uid, state.screen, state.role, state.classId, state.selectedClassId,
+        state.assignmentId, state.studentId, state.sessionCode].join('|');
+    }
 
     function saveStepScreenState() {
-      if (restoringStepScreen || !signedInUser) return;
+      if (restoringStepScreen || navigatingStepHistory || !signedInUser) return;
       const isVisible = element => Boolean(element && !element.classList.contains('hidden'));
       let screen = 'role';
       const classScreen = document.getElementById('classSelectionScreen');
@@ -675,8 +683,54 @@
         scrollY: Math.max(0, window.scrollY || document.documentElement.scrollTop || 0),
         savedAt: Date.now()
       };
-      try { sessionStorage.setItem(STEP_SCREEN_STATE_KEY, JSON.stringify(state)); }
-      catch (err) { console.warn('Could not save screen state:', err); }
+      try {
+        const previous = JSON.parse(sessionStorage.getItem(STEP_SCREEN_STATE_KEY) || 'null');
+        let stack = JSON.parse(sessionStorage.getItem(STEP_SCREEN_HISTORY_KEY) || '[]');
+        if (!Array.isArray(stack)) stack = [];
+        if (previous && previous.uid === signedInUser.uid && getStepScreenKey(previous) !== getStepScreenKey(state)
+          && (!stack.length || getStepScreenKey(stack[stack.length - 1]) !== getStepScreenKey(previous))) {
+          stack.push(previous);
+        }
+        if (!stack.length) stack.push(state);
+        if (getStepScreenKey(stack[stack.length - 1]) !== getStepScreenKey(state)) stack.push(state);
+        else stack[stack.length - 1] = state;
+        // Bound tab-local history to prevent unbounded sessionStorage growth.
+        if (stack.length > 40) stack = stack.slice(-40);
+        sessionStorage.setItem(STEP_SCREEN_HISTORY_KEY, JSON.stringify(stack));
+        sessionStorage.setItem(STEP_SCREEN_STATE_KEY, JSON.stringify(state));
+      } catch (err) { console.warn('Could not save screen state/history:', err); }
+    }
+
+    async function navigateToPreviousStepScreen() {
+      if (!signedInUser) return;
+      let stack = [];
+      try { stack = JSON.parse(sessionStorage.getItem(STEP_SCREEN_HISTORY_KEY) || '[]'); }
+      catch (err) { console.warn('Could not read navigation history:', err); }
+      if (!Array.isArray(stack) || stack.length < 2) {
+        showToast('There is no previous page in this tab.', 'info');
+        return;
+      }
+      stack.pop();
+      const previous = stack[stack.length - 1];
+      if (!previous || previous.uid !== signedInUser.uid) {
+        showToast('The previous page is no longer available.', 'info');
+        return;
+      }
+      navigatingStepHistory = true;
+      try {
+        sessionStorage.setItem(STEP_SCREEN_HISTORY_KEY, JSON.stringify(stack));
+        sessionStorage.setItem(STEP_SCREEN_STATE_KEY, JSON.stringify(previous));
+        const restored = await restoreStepScreenState();
+        if (!restored) {
+          stack.pop();
+          sessionStorage.setItem(STEP_SCREEN_HISTORY_KEY, JSON.stringify(stack));
+          showToast('Could not restore the previous page. Returning to the dashboard.', 'error');
+          if (currentUserRole === 'teacher') await switchRole('teacher');
+          else await switchRole('student');
+        }
+      } finally {
+        navigatingStepHistory = false;
+      }
     }
 
     function readStepScreenState() {
@@ -885,12 +939,7 @@
       if (event.key === 'Enter') createClassFromForm();
     });
 
-    document.getElementById('backToWelcomeFromClassBtn').addEventListener('click', () => {
-      pendingPortalRole = null;
-      document.getElementById('classSelectionScreen').classList.add('hidden');
-      roleSelectionScreen.classList.remove('hidden');
-      saveStepScreenState();
-    });
+    document.getElementById('backToWelcomeFromClassBtn').addEventListener('click', navigateToPreviousStepScreen);
     document.getElementById('continueWithClassBtn').addEventListener('click', async () => {
       if (!pendingPortalRole) {
         showToast('Choose Teacher Portal or Student Portal first.', 'error');
@@ -2652,25 +2701,9 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
-    document.getElementById('exitWorkspaceBtn').addEventListener('click', () => {
+    document.getElementById('exitWorkspaceBtn').addEventListener('click', async () => {
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
-      workspaceScreen.classList.add('hidden');
-      if (inspectingStudentId) {
-        teacherDashboard.classList.remove('hidden');
-        inspectingStudentId = null;
-        teacherInspectionIndex = -1;
-        updateTeacherWorkNavigation();
-        // Restore the dashboard at its previous scroll position; do not reload/reset its active view.
-        requestAnimationFrame(() => window.scrollTo(0, teacherDashboardScrollY));
-      } else if (currentUserRole === 'student') {
-        studentHistoryScreen.classList.remove('hidden');
-        document.getElementById('exitWorkspaceBtn').innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back to Dashboard';
-      } else {
-        teacherDashboard.classList.remove('hidden');
-      }
-      saveStepScreenState();
-      // Keep the teacher's existing dashboard/assignment view in place. Reloading it here
-      // resets the view and causes avoidable Firestore reads.
+      await navigateToPreviousStepScreen();
     });
 
     // ==========================================
