@@ -3086,6 +3086,7 @@ async function loadAssignmentProgressCounts(assignment) {
       try {
         // Flush any pending two-second canvas save before archiving the submission.
         await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
         await archiveStudentCanvasToStorage(currentAssignmentId, signedInUser.uid);
         const now = firebase.firestore.FieldValue.serverTimestamp();
         await db.collection('users').doc(signedInUser.uid).collection('submissions').doc(currentAssignmentId).set({
@@ -3158,8 +3159,16 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     document.getElementById('exitWorkspaceBtn').addEventListener('click', async () => {
+      try {
+        await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
+      } catch (err) {
+        showToast('Could not finish saving this slide. Stay on the page and retry.', 'error');
+        return;
+      }
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
       stopAnnotationListener();
+      stopStudentVectorListener();
       await navigateToPreviousStepScreen();
     });
 
@@ -3173,6 +3182,7 @@ async function loadAssignmentProgressCounts(assignment) {
       updateHistoryButtons();
       updateSlideNavigationUI();
       resizeCanvas();
+      ensureStudentVectorCanvas();
       ensureAnnotationCanvas();
       updatePeerHelpControls();
       loadCurrentSlideData();
@@ -3216,6 +3226,7 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('prevSlideBtn').addEventListener('click', async () => {
       if (currentSlideIndex > 0) {
         await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
         currentSlideIndex--;
         setupSlideWorkspace();
       }
@@ -3225,6 +3236,7 @@ async function loadAssignmentProgressCounts(assignment) {
       const totalSlides = currentAssignmentData?.slides?.length || 1;
       if (currentSlideIndex < totalSlides - 1) {
         await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
         currentSlideIndex++;
         setupSlideWorkspace();
       }
@@ -3250,8 +3262,10 @@ async function loadAssignmentProgressCounts(assignment) {
       applyCanvasZoom();
 
       redrawBackgroundAndCanvas();
-      // Restore previous drawing buffer
+      // Restore the photo/legacy raster layer. Vector handwriting is redrawn from normalized points.
       ctx.drawImage(tempCanvas, 0, 0, mainCanvas.width, mainCanvas.height);
+      if (studentVectorCanvas) ensureStudentVectorCanvas();
+      if (annotationCanvas) ensureAnnotationCanvas();
     }
 
     window.addEventListener('resize', () => { resizeCanvas(); if (annotationCanvas) ensureAnnotationCanvas(); });
@@ -3591,6 +3605,7 @@ async function loadAssignmentProgressCounts(assignment) {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         flushCanvasSaveToFirestore().catch(err => console.warn('Canvas flush on background failed:', err));
+        flushStudentVectorSave().catch(err => console.warn('Student vector flush on background failed:', err));
       }
     });
 
@@ -3618,8 +3633,13 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function captureCanvasState() {
       if (!mainCanvas.width || !mainCanvas.height) return null;
-      try { return ctx.getImageData(0, 0, mainCanvas.width, mainCanvas.height); }
-      catch (err) { console.warn('Could not capture canvas history:', err); return null; }
+      try {
+        const raster = ctx.getImageData(0, 0, mainCanvas.width, mainCanvas.height);
+        if (isStudentVectorEditingContext()) {
+          return { kind: 'student-composite', raster, strokes: JSON.parse(JSON.stringify(localStudentStrokes)) };
+        }
+        return raster;
+      } catch (err) { console.warn('Could not capture canvas history:', err); return null; }
     }
 
     function beginCanvasAction() {
@@ -3634,14 +3654,20 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function restoreCanvasState(state) {
       if (!state) return;
-      if (state.width !== mainCanvas.width || state.height !== mainCanvas.height) {
+      const rasterState = state.kind === 'student-composite' ? state.raster : state;
+      if (rasterState.width !== mainCanvas.width || rasterState.height !== mainCanvas.height) {
         showToast('Undo history was reset because the canvas size changed.', 'info');
         undoStack = [];
         redoStack = [];
         updateHistoryButtons();
         return;
       }
-      ctx.putImageData(state, 0, 0);
+      ctx.putImageData(rasterState, 0, 0);
+      if (state.kind === 'student-composite') {
+        localStudentStrokes = state.strokes || [];
+        renderStudentVectorLayer();
+        scheduleStudentVectorSave(true);
+      }
       saveCanvasToFirestore();
       updateHistoryButtons();
     }
@@ -3834,6 +3860,16 @@ async function loadAssignmentProgressCounts(assignment) {
         if (!confirm('Clear your annotations on this slide? The original student work and other annotators’ strokes will remain unchanged.')) return;
         copyAnnotationSnapshot(); localAnnotationStrokes = []; renderAnnotationLayers(); scheduleVectorAnnotationSave(true); return;
       }
+      if (isStudentVectorEditingContext()) {
+        if (!window.confirm('Clear all writing and inserted photos on this slide? This action can be undone with Undo.')) return;
+        beginCanvasAction();
+        redrawBackgroundAndCanvas();
+        localStudentStrokes = [];
+        renderStudentVectorLayer();
+        saveCanvasToFirestore();
+        scheduleStudentVectorSave(true);
+        return;
+      }
       if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return;
@@ -3853,6 +3889,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function applyCanvasZoom() {
       mainCanvas.style.transform = `translate(${canvasPanX}px, ${canvasPanY}px) scale(${canvasZoom})`;
+      if (studentVectorCanvas) studentVectorCanvas.style.transform = mainCanvas.style.transform;
       if (annotationCanvas) annotationCanvas.style.transform = mainCanvas.style.transform;
       const label = document.getElementById('canvasZoomLabel');
       if (label) label.textContent = Math.round(canvasZoom * 100) + '%';
@@ -4080,6 +4117,8 @@ async function loadAssignmentProgressCounts(assignment) {
       outputCtx.fillStyle = '#fff';
       outputCtx.fillRect(0, 0, output.width, output.height);
       outputCtx.drawImage(mainCanvas, 0, 0);
+      // Peer-help snapshots include student handwriting so helpers see the complete page.
+      if (studentVectorCanvas && localStudentStrokes.length) outputCtx.drawImage(studentVectorCanvas, 0, 0);
       return output.toDataURL('image/jpeg', 0.92);
     }
 
@@ -4129,7 +4168,16 @@ async function loadAssignmentProgressCounts(assignment) {
         penTool.classList.add('bg-indigo-600', 'text-white');
         penTool.classList.remove('bg-white', 'text-slate-700');
       }
-      if (mainCanvas) mainCanvas.style.pointerEvents = (requesterIsLocked || !canvasLoadReady || isVectorAnnotationContext()) ? 'none' : 'auto';
+      if (mainCanvas) mainCanvas.style.pointerEvents =
+        (requesterIsLocked || !canvasLoadReady || isVectorAnnotationContext() || isStudentVectorEditingContext()) ? 'none' : 'auto';
+      if (studentVectorCanvas) {
+        studentVectorCanvas.style.pointerEvents = (canvasLoadReady && isStudentVectorEditingContext()) ? 'auto' : 'none';
+        studentVectorCanvas.style.transform = mainCanvas.style.transform;
+      }
+      if (studentVectorCanvas) {
+        studentVectorCanvas.style.pointerEvents = (canvasLoadReady && isStudentVectorEditingContext()) ? 'auto' : 'none';
+        studentVectorCanvas.style.transform = mainCanvas.style.transform;
+      }
       if (annotationCanvas) { annotationCanvas.style.pointerEvents = canDrawVectorAnnotations() ? 'auto' : 'none'; annotationCanvas.style.transform = mainCanvas.style.transform; }
       if (submitHelper) submitHelper.disabled = !canvasLoadReady;
       if (submitTeacher) submitTeacher.disabled = !canvasLoadReady;
