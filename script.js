@@ -2210,6 +2210,17 @@
       if (currentAssignmentId && currentAssignmentData) deleteTeacherAssignment(currentAssignmentId, currentAssignmentData);
     });
 
+    async function deleteSlideSubcollections(slideRef, collectionNames) {
+      for (const collectionName of collectionNames) {
+        const nested = await slideRef.collection(collectionName).get();
+        for (let i = 0; i < nested.docs.length; i += 400) {
+          const batch = db.batch();
+          nested.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+      }
+    }
+
     async function deleteTeacherAssignment(assignmentId, assignment) {
       const title = assignment?.title || 'this assignment';
       if (!window.confirm(`Delete "${title}" and ALL student work for it? This cannot be undone.`)) return;
@@ -2221,6 +2232,9 @@
         const students = await ref.collection('students').get();
         for (const studentDoc of students.docs) {
           const slides = await studentDoc.ref.collection('slides').get();
+          for (const slideDoc of slides.docs) {
+            await deleteSlideSubcollections(slideDoc.ref, ['studentDrawings', 'annotations']);
+          }
           for (let i = 0; i < slides.docs.length; i += 400) {
             const batch = db.batch(); slides.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref)); await batch.commit();
           }
@@ -2253,6 +2267,9 @@
       try {
         const studentRef = db.collection('assignments').doc(assignmentId).collection('students').doc(signedInUser.uid);
         const slides = await studentRef.collection('slides').get();
+        for (const slideDoc of slides.docs) {
+          await deleteSlideSubcollections(slideDoc.ref, ['studentDrawings']);
+        }
         for (let i = 0; i < slides.docs.length; i += 400) {
           const batch = db.batch(); slides.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref)); await batch.commit();
         }
