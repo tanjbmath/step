@@ -1019,18 +1019,24 @@
             layerCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0), Number(stroke.y || 0));
             return;
           }
-          const points = Array.isArray(stroke.points) ? stroke.points : [];
+          // Firestore-compatible vector points are plain objects, not nested arrays.
+          // Read legacy tuple points defensively so previously stored annotations remain renderable.
+          const points = Array.isArray(stroke.points) ? stroke.points.map(point => {
+            const x = Number(Array.isArray(point) ? point[0] : point?.x);
+            const y = Number(Array.isArray(point) ? point[1] : point?.y);
+            return { x, y };
+          }).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
           if (!points.length) return;
           layerCtx.save();
           layerCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
           layerCtx.strokeStyle = stroke.color || '#dc2626';
           layerCtx.lineWidth = Math.max(1, Number(stroke.width || 4));
           layerCtx.lineCap = 'round'; layerCtx.lineJoin = 'round';
-          layerCtx.beginPath(); layerCtx.moveTo(points[0][0], points[0][1]);
+          layerCtx.beginPath(); layerCtx.moveTo(points[0].x, points[0].y);
           if (points.length === 1) {
-            layerCtx.lineTo(points[0][0] + 0.1, points[0][1] + 0.1);
+            layerCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
           } else {
-            for (let i = 1; i < points.length; i++) layerCtx.lineTo(points[i][0], points[i][1]);
+            for (let i = 1; i < points.length; i++) layerCtx.lineTo(points[i].x, points[i].y);
           }
           layerCtx.stroke(); layerCtx.restore();
         });
@@ -1048,7 +1054,10 @@
     function persistVectorAnnotations() {
       if (!canDrawVectorAnnotations() || !db || !annotationAuthorId()) return Promise.resolve();
       const totalPoints = localAnnotationStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
-      if (localAnnotationStrokes.length > ANNOTATION_MAX_STROKES || totalPoints > ANNOTATION_MAX_POINTS) {
+      const estimatedBytes = new Blob([JSON.stringify(localAnnotationStrokes)]).size;
+      if (localAnnotationStrokes.length > ANNOTATION_MAX_STROKES
+          || totalPoints > ANNOTATION_MAX_POINTS
+          || estimatedBytes > 700 * 1024) {
         showToast('Annotation limit reached for this slide. Remove older strokes before continuing.', 'error');
         return Promise.resolve();
       }
@@ -1120,7 +1129,7 @@
       annotationActiveStroke = {
         type: 'path', tool: activeTool, color: currentColor,
         width: activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth),
-        points: [[p.x, p.y]]
+        points: [{ x: p.x, y: p.y }]
       };
       localAnnotationStrokes.push(annotationActiveStroke);
       annotationCanvas.setPointerCapture(e.pointerId);
@@ -1134,7 +1143,7 @@
       (samples.length ? samples : [e]).forEach(sample => {
         const p = getCanvasCoordinates(sample);
         const pts = annotationActiveStroke.points;
-        if (pts.length < ANNOTATION_MAX_POINTS) pts.push([p.x, p.y]);
+        if (pts.length < ANNOTATION_MAX_POINTS) pts.push({ x: p.x, y: p.y });
       });
       renderAnnotationLayers(); scheduleVectorAnnotationSave(false);
     }
