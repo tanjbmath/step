@@ -3208,7 +3208,11 @@ async function loadAssignmentProgressCounts(assignment) {
       }
 
       const targetStudentId = inspectingStudentId || studentId;
-      if (targetStudentId) startAnnotationListener(targetStudentId);
+      // Avoid an annotation listener for ordinary in-progress student work; subscribe only
+      // when viewing submitted work or an explicit teacher/peer review target.
+      if (targetStudentId && (inspectingStudentId || currentSubmissionStatus !== 'in-progress' || activeHelpRequestId)) {
+        startAnnotationListener(targetStudentId);
+      }
       if (!targetStudentId) {
         setCanvasLoadReady(true);
         return;
