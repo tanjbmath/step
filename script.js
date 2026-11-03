@@ -1353,6 +1353,7 @@
     }
 
     function handleStudentVectorPointerDown(e) {
+      if (multiTouchGestureActive) return;
       if (!isStudentVectorEditingContext() || !canvasLoadReady || (isStylusOnlyMode && e.pointerType === 'touch')) return;
       e.preventDefault();
       const p = getCanvasCoordinates(e);
@@ -1395,6 +1396,7 @@
     }
 
     function handleStudentVectorPointerMove(e) {
+      if (multiTouchGestureActive) return;
       if ((!studentVectorActiveStroke && !studentVectorEraseGesture) || !isStudentVectorEditingContext()) return;
       if (isStylusOnlyMode && e.pointerType === 'touch') return;
       e.preventDefault();
@@ -1593,6 +1595,7 @@
       });
     }
     function handleAnnotationPointerDown(e) {
+      if (multiTouchGestureActive) return;
       if (!canDrawVectorAnnotations() || (isStylusOnlyMode && e.pointerType === 'touch')) return;
       e.preventDefault();
       const p = getCanvasCoordinates(e);
@@ -1616,6 +1619,7 @@
       renderAnnotationLayers(); scheduleVectorAnnotationSave(true);
     }
     function handleAnnotationPointerMove(e) {
+      if (multiTouchGestureActive) return;
       if (!annotationActiveStroke || !canDrawVectorAnnotations()) return;
       if (isStylusOnlyMode && e.pointerType === 'touch') return;
       e.preventDefault();
@@ -4260,6 +4264,57 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('canvasZoomOutBtn').addEventListener('click', () => setCanvasZoom(canvasZoom - 0.25));
     document.getElementById('canvasZoomResetBtn').addEventListener('click', resetCanvasZoom);
 
+    // Track touch pointers at the wrapper's capture phase. This runs before
+    // a canvas receives pointerdown, so the second finger cannot start a stroke.
+    let multiTouchGestureActive = false;
+    const activeTouchPointers = new Set();
+
+    function cancelCanvasStrokeForGesture() {
+      if (annotationActiveStroke) {
+        if (localAnnotationStrokes[localAnnotationStrokes.length - 1] === annotationActiveStroke) {
+          localAnnotationStrokes.pop();
+        }
+        annotationActiveStroke = null;
+        if (annotationUndo.length) annotationUndo.pop();
+        renderAnnotationLayers();
+        updateAnnotationHistoryButtons();
+        scheduleVectorAnnotationSave(true);
+      } else if (studentVectorActiveStroke || studentVectorEraseGesture) {
+        const previous = undoStack.pop();
+        studentVectorActiveStroke = null;
+        studentVectorEraseGesture = null;
+        isDrawing = false;
+        if (previous) restoreCanvasState(previous);
+        updateHistoryButtons();
+      } else if (isDrawing) {
+        const previous = undoStack.pop();
+        isDrawing = false;
+        if (previous) restoreCanvasState(previous);
+        updateHistoryButtons();
+      }
+    }
+
+    canvasWrapper.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'touch') return;
+      activeTouchPointers.add(e.pointerId);
+      if (activeTouchPointers.size >= 2) {
+        multiTouchGestureActive = true;
+        cancelCanvasStrokeForGesture();
+      }
+    }, true);
+
+    function releaseTrackedTouchPointer(e) {
+      if (e.pointerType !== 'touch') return;
+      activeTouchPointers.delete(e.pointerId);
+      if (activeTouchPointers.size === 0) multiTouchGestureActive = false;
+    }
+    canvasWrapper.addEventListener('pointerup', releaseTrackedTouchPointer, true);
+    canvasWrapper.addEventListener('pointercancel', releaseTrackedTouchPointer, true);
+
+    // Prevent the browser from taking over the two-finger gesture. We handle
+    // pinch and pan ourselves while one-finger/stylus input remains for drawing.
+    canvasWrapper.style.touchAction = 'none';
+
     // Two-finger gestures support both pinch-to-zoom and drag-to-pan.
     // One-finger/stylus input remains available for writing.
     let pinchStartDistance = 0;
@@ -4335,6 +4390,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
     // Advanced Pointer Events for Stylus / Apple Pencil + Palm Rejection Toggle
     function handlePointerDown(e) {
+      if (multiTouchGestureActive) return;
       if (!canvasLoadReady) {
         showToast('Please wait for the saved canvas to finish loading before drawing.', 'info');
         return;
@@ -4376,7 +4432,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function handlePointerMove(e) {
-      if (!isDrawing) return;
+      if (multiTouchGestureActive || !isDrawing) return;
 
       // Filter touch points in Stylus Only mode during motion
       if (isStylusOnlyMode && e.pointerType === 'touch') {
