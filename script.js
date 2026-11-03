@@ -4678,6 +4678,8 @@ async function loadAssignmentProgressCounts(assignment) {
         const now = firebase.firestore.FieldValue.serverTimestamp();
         const requestedMode = isPeerHelpEnabled() ? 'peer' : 'teacher';
         let finalMode = requestedMode;
+        // Commit pending vector handwriting before creating the help snapshot.
+        await flushStudentVectorSave();
         const canvasData = exportCanvasJpeg();
         const commitRequest = async mode => {
           const batch = db.batch();
