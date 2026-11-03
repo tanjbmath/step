@@ -630,11 +630,56 @@ service cloud.firestore {
         match /slides/{slideId} {
           allow read: if isOwner(studentUid) || ownsAssignment(assignmentId)
             || isActivePeerHelper(assignmentId, studentUid);
+          // Student handwriting is stored independently from the raster photo layer.
+          // Students may edit only their own vector document while no helper holds the work lock.
+          // Teachers and the currently assigned helper may read it, but cannot modify it.
+          match /studentDrawings/{drawingId} {
+            function studentCanEditVector() {
+              let studentPath = /databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid);
+              return isOwner(studentUid)
+                && isAssignmentMember(assignmentId, studentUid)
+                && get(studentPath).data.status in ['in-progress', 'assignment-started']
+                && (
+                  !('activeHelpLockKey' in get(studentPath).data)
+                  || get(helpLockPath(assignmentId, get(studentPath).data.activeHelpLockKey)).data.status != 'helping'
+                );
+            }
+
+            allow read: if isOwner(studentUid) || ownsAssignment(assignmentId)
+              || isActivePeerHelper(assignmentId, studentUid);
+
+            allow create, update: if drawingId == 'student'
+              && studentCanEditVector()
+              && request.resource.data.keys().hasOnly(['ownerUid', 'format', 'strokes', 'updatedAt'])
+              && request.resource.data.ownerUid == studentUid
+              && request.resource.data.format == 'normalized-v1'
+              && request.resource.data.strokes is list
+              && request.resource.data.strokes.size() <= 300;
+
+            function studentCanDeleteVector() {
+              let studentPath = /databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid);
+              let assignmentPath = /databases/$(database)/documents/assignments/$(assignmentId);
+              return ownsAssignment(assignmentId) || (
+                isOwner(studentUid)
+                && (
+                  !exists(assignmentPath)
+                  || !exists(studentPath)
+                  || !('activeHelpLockKey' in get(studentPath).data)
+                  || get(helpLockPath(assignmentId, get(studentPath).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired', 'cancelled']
+                )
+              );
+            }
+
+            allow delete: if drawingId == 'student' && studentCanDeleteVector();
+          }
+
           match /annotations/{authorUid} {
             allow read: if isOwner(studentUid) || ownsAssignment(assignmentId)
               || isActivePeerHelper(assignmentId, studentUid);
+            // Teacher and peer helper intentionally write to the same "staff" document.
+            // The teacher may revise the peer helper's strokes without creating a second layer.
             allow create, update: if request.auth != null
-              && authorUid == request.auth.uid
+              && authorUid == 'staff'
               && request.resource.data.authorUid == request.auth.uid
               && request.resource.data.keys().hasOnly(['authorUid', 'role', 'strokes', 'updatedAt'])
               && request.resource.data.strokes is list
@@ -643,7 +688,7 @@ service cloud.firestore {
                 (ownsAssignment(assignmentId) && request.resource.data.role == 'teacher')
                 || (isActivePeerHelper(assignmentId, studentUid) && request.resource.data.role == 'peer')
               );
-            allow delete: if request.auth != null && authorUid == request.auth.uid
+            allow delete: if request.auth != null && authorUid == 'staff'
               && (ownsAssignment(assignmentId) || isActivePeerHelper(assignmentId, studentUid));
           }
           allow create, update: if (

@@ -438,6 +438,26 @@
 
   </main>
 
+  <!-- MOBILE-SAFE TEXT OVERLAY DIALOG -->
+  <div id="textOverlayModal" class="hidden fixed inset-0 z-[90] bg-slate-950/60 backdrop-blur-sm p-4 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="textOverlayTitle">
+    <section class="w-full max-w-md rounded-2xl bg-white shadow-2xl p-5 space-y-4">
+      <div>
+        <h2 id="textOverlayTitle" class="text-lg font-bold text-slate-800">Add text overlay</h2>
+        <p class="mt-1 text-sm text-slate-500">Enter the text to place at the selected point on the canvas.</p>
+      </div>
+      <form id="textOverlayForm" class="space-y-4">
+        <div>
+          <label for="textOverlayInput" class="block text-sm font-semibold text-slate-700 mb-1">Text</label>
+          <textarea id="textOverlayInput" maxlength="500" rows="3" autocomplete="off" placeholder="Type your text here…" class="w-full rounded-lg border border-slate-300 px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500" required></textarea>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button id="textOverlayCancelBtn" type="button" class="min-h-11 rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>
+          <button type="submit" class="min-h-11 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">Add text</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
   <!-- ASK TEACHER FOR HELP MODAL -->
   <div id="askForHelpModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="askForHelpTitle">
     <section class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">

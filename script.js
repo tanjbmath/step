@@ -26,6 +26,8 @@
     let teacherAssignmentsUnsubscribe = null;
     // Keep exactly one live preview listener per joined student in the active assignment.
     const studentPreviewUnsubscribers = new Map();
+    const studentPreviewVectorUnsubscribers = new Map();
+    const studentPreviewVectorData = new Map();
     const studentPreviewData = new Map();
     const studentPreviewVersions = new Map();
     let teacherStatsRefreshTimer = null;
@@ -934,6 +936,23 @@
     // transparent canvas and in one Firestore document per annotator and slide.
     let annotationCanvas = null;
     let annotationCtx = null;
+    let studentVectorCanvas = null;
+    let studentVectorCtx = null;
+    let unsubStudentVectors = null;
+    let localStudentStrokes = [];
+    let studentVectorActiveStroke = null;
+    let studentVectorEraseGesture = null;
+    let studentVectorSaveTimer = null;
+    let studentVectorSaveInFlight = Promise.resolve();
+    let studentVectorDirty = false;
+    let studentVectorLoading = false;
+    let studentVectorLoadFailed = false;
+    let studentVectorLastWriteAt = 0;
+    let studentVectorLoadKey = '';
+    let studentVectorMarkerKey = '';
+    const STUDENT_VECTOR_WRITE_MS = 2000;
+    const STUDENT_VECTOR_MAX_STROKES = 300;
+    const STUDENT_VECTOR_MAX_POINTS = 10000;
     let unsubAnnotations = null;
     let annotationRecords = new Map();
     let localAnnotationStrokes = [];
@@ -981,9 +1000,455 @@
       annotationCanvas.style.pointerEvents = writable ? 'auto' : 'none';
       annotationCanvas.style.display = (inspectingStudentId || annotationRecords.size) ? 'block' : 'none';
       annotationCanvas.style.transform = mainCanvas.style.transform;
-      mainCanvas.style.pointerEvents = isVectorAnnotationContext() ? 'none' : mainCanvas.style.pointerEvents;
+      annotationCanvas.style.zIndex = '3';
+      mainCanvas.style.pointerEvents = (isVectorAnnotationContext() || isStudentVectorEditingContext()) ? 'none' : mainCanvas.style.pointerEvents;
     }
-    function annotationAuthorId() { return signedInUser?.uid || ''; }
+    function isStudentVectorEditingContext() {
+      return Boolean(currentUserRole === 'student' && !inspectingStudentId
+        && currentSubmissionStatus === 'in-progress'
+        && !['helper', 'teacher'].includes(activeHelpMode)
+        && !requesterHelpLock
+        && signedInUser && studentId === signedInUser.uid && currentAssignmentId);
+    }
+
+    function studentVectorSlideRef(targetUid = inspectingStudentId || studentId) {
+      return db.collection('assignments').doc(currentAssignmentId)
+        .collection('students').doc(targetUid)
+        .collection('slides').doc('slide_' + currentSlideIndex);
+    }
+
+    function ensureStudentVectorCanvas() {
+      if (!studentVectorCanvas) {
+        studentVectorCanvas = document.createElement('canvas');
+        studentVectorCanvas.id = 'studentVectorCanvas';
+        studentVectorCanvas.setAttribute('aria-label', 'Student vector handwriting');
+        Object.assign(studentVectorCanvas.style, {
+          position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
+          zIndex: '2', touchAction: 'none', pointerEvents: 'none', transformOrigin: '0 0'
+        });
+        canvasWrapper.appendChild(studentVectorCanvas);
+        studentVectorCtx = studentVectorCanvas.getContext('2d');
+        studentVectorCanvas.addEventListener('pointerdown', handleStudentVectorPointerDown);
+        studentVectorCanvas.addEventListener('pointermove', handleStudentVectorPointerMove);
+        studentVectorCanvas.addEventListener('pointerup', handleStudentVectorPointerUp);
+        studentVectorCanvas.addEventListener('pointercancel', handleStudentVectorPointerUp);
+      }
+      if (studentVectorCanvas.width !== mainCanvas.width || studentVectorCanvas.height !== mainCanvas.height) {
+        studentVectorCanvas.width = mainCanvas.width;
+        studentVectorCanvas.height = mainCanvas.height;
+      }
+      studentVectorCanvas.style.transform = mainCanvas.style.transform;
+      studentVectorCanvas.style.pointerEvents = canvasLoadReady && isStudentVectorEditingContext() ? 'auto' : 'none';
+      studentVectorCanvas.style.display = (isStudentVectorEditingContext() || inspectingStudentId || localStudentStrokes.length) ? 'block' : 'none';
+      if (isStudentVectorEditingContext() || isVectorAnnotationContext()) mainCanvas.style.pointerEvents = 'none';
+      renderStudentVectorLayer();
+    }
+
+    function drawStudentStrokesToContext(targetCtx, strokes, width, height) {
+      targetCtx.clearRect(0, 0, width, height);
+      (strokes || []).forEach(stroke => {
+        if (stroke.type === 'text') {
+          const textScale = width / 1000;
+          targetCtx.globalCompositeOperation = 'source-over';
+          targetCtx.font = (Number(stroke.width || 0.004) * width * 4 + 12 * textScale) + 'px Inter, sans-serif';
+          targetCtx.fillStyle = stroke.color || '#1e293b';
+          targetCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0) * width, Number(stroke.y || 0) * height);
+          return;
+        }
+        const points = Array.isArray(stroke.points) ? stroke.points.map(point => ({
+          x: Number(Array.isArray(point) ? point[0] : point?.x) * width,
+          y: Number(Array.isArray(point) ? point[1] : point?.y) * height
+        })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
+        if (!points.length) return;
+        const breaks = new Set(Array.isArray(stroke.breaks) ? stroke.breaks : []);
+        targetCtx.save();
+        targetCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+        targetCtx.strokeStyle = stroke.color || '#1e293b';
+        targetCtx.lineWidth = Math.max(1, Number(stroke.width || 0.004) * width);
+        targetCtx.lineCap = 'round'; targetCtx.lineJoin = 'round';
+        targetCtx.beginPath();
+        points.forEach((point, index) => {
+          if (index === 0 || breaks.has(index)) targetCtx.moveTo(point.x, point.y);
+          else targetCtx.lineTo(point.x, point.y);
+        });
+        if (points.length === 1) targetCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
+        targetCtx.stroke(); targetCtx.restore();
+      });
+    }
+
+    function studentPointToSegmentDistance(point, start, end) {
+      const dx = end.x - start.x, dy = end.y - start.y;
+      const lengthSquared = dx * dx + dy * dy;
+      if (!lengthSquared) return Math.hypot(point.x - start.x, point.y - start.y);
+      const t = Math.max(0, Math.min(1,
+        ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+      return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+    }
+
+    function studentPointToEraserDistance(point, eraserPoints) {
+      if (!eraserPoints.length) return Infinity;
+      if (eraserPoints.length === 1) return Math.hypot(point.x - eraserPoints[0].x, point.y - eraserPoints[0].y);
+      let distance = Infinity;
+      for (let i = 1; i < eraserPoints.length; i++) {
+        distance = Math.min(distance, studentPointToSegmentDistance(point, eraserPoints[i - 1], eraserPoints[i]));
+        if (distance === 0) break;
+      }
+      return distance;
+    }
+
+    function studentInterpolatePoint(a, b, t) {
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+
+    function clipStudentVectorSubpath(points, eraserPoints, eraserRadius) {
+      if (!points.length) return [];
+      const outside = point => studentPointToEraserDistance(point, eraserPoints) > eraserRadius;
+      if (points.length === 1) return outside(points[0]) ? [points] : [];
+
+      const fragments = [];
+      let fragment = outside(points[0]) ? [points[0]] : [];
+      for (let segmentIndex = 1; segmentIndex < points.length; segmentIndex++) {
+        const start = points[segmentIndex - 1], end = points[segmentIndex];
+        const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+        const steps = Math.max(1, Math.min(256,
+          Math.ceil(segmentLength / Math.max(eraserRadius * 0.5, 0.0005))));
+        let previousT = 0;
+        let previousOutside = outside(start);
+
+        for (let step = 1; step <= steps; step++) {
+          const t = step / steps;
+          const sample = studentInterpolatePoint(start, end, t);
+          const sampleOutside = outside(sample);
+          if (previousOutside !== sampleOutside) {
+            let low = previousT, high = t;
+            const lowIsOutside = previousOutside;
+            for (let iteration = 0; iteration < 12; iteration++) {
+              const middle = (low + high) / 2;
+              if (outside(studentInterpolatePoint(start, end, middle)) === lowIsOutside) low = middle;
+              else high = middle;
+            }
+            const boundary = studentInterpolatePoint(start, end, (low + high) / 2);
+            if (previousOutside) {
+              if (!fragment.length) fragment.push(studentInterpolatePoint(start, end, previousT));
+              fragment.push(boundary);
+              if (fragment.length) fragments.push(fragment);
+              fragment = [];
+            } else {
+              fragment = [boundary];
+            }
+          }
+          if (step === steps && sampleOutside) {
+            if (!fragment.length) fragment.push(sample);
+            else {
+              const last = fragment[fragment.length - 1];
+              if (Math.hypot(last.x - sample.x, last.y - sample.y) > 1e-9) fragment.push(sample);
+            }
+          }
+          previousT = t;
+          previousOutside = sampleOutside;
+        }
+      }
+      if (fragment.length) fragments.push(fragment);
+      return fragments.filter(part => part.length > 0);
+    }
+
+    function eraseStudentVectorStrokes(eraserPoints, eraserRadius) {
+      if (!eraserPoints.length || !localStudentStrokes.length) return false;
+      let changed = false;
+      const nextStrokes = [];
+
+      localStudentStrokes.forEach(stroke => {
+        if (stroke.type === 'text') {
+          const text = String(stroke.text || '');
+          const fontSize = Number(stroke.width || 0.004) * mainCanvas.width * 4
+            + 12 * (mainCanvas.width / 1000);
+          const left = Number(stroke.x || 0);
+          const top = Number(stroke.y || 0) - fontSize / mainCanvas.height;
+          const right = left + (text.length * fontSize * 0.55 / mainCanvas.width);
+          const bottom = Number(stroke.y || 0) + eraserRadius;
+          const hit = eraserPoints.some(point =>
+            point.x >= left - eraserRadius && point.x <= right + eraserRadius
+            && point.y >= top - eraserRadius && point.y <= bottom + eraserRadius);
+          if (hit) changed = true;
+          else nextStrokes.push(stroke);
+          return;
+        }
+
+        // Older documents may contain destination-out eraser operations. Keep their
+        // order and semantics; new erasing is destructive geometry clipping instead.
+        if (stroke.tool === 'eraser' || !Array.isArray(stroke.points) || !stroke.points.length) {
+          nextStrokes.push(stroke);
+          return;
+        }
+
+        const originalPoints = stroke.points.map(point => ({
+          x: Number(Array.isArray(point) ? point[0] : point?.x),
+          y: Number(Array.isArray(point) ? point[1] : point?.y)
+        })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+        if (!originalPoints.length) { nextStrokes.push(stroke); return; }
+
+        const breakIndexes = new Set(Array.isArray(stroke.breaks) ? stroke.breaks : []);
+        const sourceParts = [];
+        let part = [];
+        originalPoints.forEach((point, index) => {
+          if (index > 0 && breakIndexes.has(index)) {
+            if (part.length) sourceParts.push(part);
+            part = [];
+          }
+          part.push(point);
+        });
+        if (part.length) sourceParts.push(part);
+
+        const strokeRadius = eraserRadius + Math.max(0, Number(stroke.width || 0.004)) / 2;
+        const clippedParts = sourceParts.flatMap(sourcePart =>
+          clipStudentVectorSubpath(sourcePart, eraserPoints, strokeRadius));
+        const flattened = [];
+        const breaks = [];
+        clippedParts.forEach((clippedPart, index) => {
+          if (index > 0) breaks.push(flattened.length);
+          flattened.push(...clippedPart);
+        });
+
+        const sameGeometry = flattened.length === originalPoints.length
+          && flattened.every((point, index) =>
+            Math.abs(point.x - originalPoints[index].x) < 1e-8
+            && Math.abs(point.y - originalPoints[index].y) < 1e-8);
+        if (!sameGeometry) changed = true;
+        if (flattened.length) nextStrokes.push({
+          ...stroke,
+          points: flattened,
+          ...(breaks.length ? { breaks } : { breaks: [] })
+        });
+      });
+
+      if (changed) localStudentStrokes = nextStrokes;
+      return changed;
+    }
+
+    function compactLegacyStudentVectorErasers(strokes) {
+      let working = [];
+      let changed = false;
+      (strokes || []).forEach(stroke => {
+        if (stroke?.tool === 'eraser' && Array.isArray(stroke.points)) {
+          const points = stroke.points.map(point => ({
+            x: Number(Array.isArray(point) ? point[0] : point?.x),
+            y: Number(Array.isArray(point) ? point[1] : point?.y)
+          })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+          if (points.length) {
+            const previous = localStudentStrokes;
+            localStudentStrokes = working;
+            const erased = eraseStudentVectorStrokes(points, Math.max(0, Number(stroke.width || 0)) / 2);
+            working = localStudentStrokes;
+            localStudentStrokes = previous;
+            changed = changed || erased;
+          } else {
+            changed = true;
+          }
+        } else {
+          working.push(stroke);
+        }
+      });
+      // Every legacy eraser operation is removed after being applied to the paths
+      // that preceded it, preserving the original draw/erase ordering.
+      if ((strokes || []).some(stroke => stroke?.tool === 'eraser')) changed = true;
+      return { strokes: working, changed };
+    }
+
+    function renderStudentVectorLayer() {
+      if (!studentVectorCtx || !studentVectorCanvas) return;
+      studentVectorCanvas.style.display =
+        (isStudentVectorEditingContext() || inspectingStudentId || localStudentStrokes.length) ? 'block' : 'none';
+      drawStudentStrokesToContext(studentVectorCtx, localStudentStrokes,
+        studentVectorCanvas.width, studentVectorCanvas.height);
+    }
+
+    function stopStudentVectorListener() {
+      if (unsubStudentVectors) { unsubStudentVectors(); unsubStudentVectors = null; }
+      if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
+      studentVectorDirty = false; studentVectorLoading = false; studentVectorLoadFailed = false;
+      localStudentStrokes = []; studentVectorActiveStroke = null; studentVectorEraseGesture = null; studentVectorLoadKey = '';
+      if (studentVectorCtx && studentVectorCanvas) studentVectorCtx.clearRect(0, 0, studentVectorCanvas.width, studentVectorCanvas.height);
+    }
+
+    function startStudentVectorListener(targetUid) {
+      if (!db || !currentAssignmentId || !targetUid) return;
+      const key = [currentAssignmentId, targetUid, currentSlideIndex].join(':');
+      if (studentVectorLoadKey === key) return;
+      stopStudentVectorListener(); studentVectorLoadKey = key;
+      studentVectorLoading = true; studentVectorLoadFailed = false;
+      setCanvasLoadReady(canvasBaseLoadReady);
+      ensureStudentVectorCanvas();
+      unsubStudentVectors = studentVectorSlideRef(targetUid).collection('studentDrawings').doc('student')
+        .onSnapshot(doc => {
+          if (studentVectorActiveStroke || studentVectorDirty) return;
+          const data = doc.exists ? (doc.data() || {}) : {};
+          const savedStrokes = Array.isArray(data.strokes) ? data.strokes : [];
+          const compacted = compactLegacyStudentVectorErasers(savedStrokes);
+          localStudentStrokes = compacted.strokes;
+          studentVectorLoading = false; studentVectorLoadFailed = false;
+          renderStudentVectorLayer();
+          setCanvasLoadReady(canvasBaseLoadReady);
+          // Migrate old white/eraser vector operations into clipped paths on the
+          // student's next editable load. Read-only teacher previews never write.
+          if (compacted.changed && isStudentVectorEditingContext()) scheduleStudentVectorSave(true);
+        }, err => {
+          studentVectorLoading = false; studentVectorLoadFailed = true;
+          console.warn('Student vector listener failed:', err);
+          showToast('Could not load saved handwriting. Editing is paused to protect existing work.', 'error');
+          setCanvasLoadReady(false);
+        });
+    }
+
+    function persistStudentVectorDrawings() {
+      if (!isStudentVectorEditingContext() || !db) return Promise.resolve();
+      const points = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
+      const bytes = new Blob([JSON.stringify(localStudentStrokes)]).size;
+      if (localStudentStrokes.length > STUDENT_VECTOR_MAX_STROKES || points > STUDENT_VECTOR_MAX_POINTS || bytes > 700 * 1024) {
+        return Promise.reject(new Error('Handwriting limit reached for this slide. Remove older strokes before continuing.'));
+      }
+      const slideRef = studentVectorSlideRef(signedInUser.uid);
+      const ref = slideRef.collection('studentDrawings').doc('student');
+      const payload = { ownerUid: signedInUser.uid, format: 'normalized-v1',
+        strokes: localStudentStrokes.slice(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+      const markerKey = [currentAssignmentId, signedInUser.uid, currentSlideIndex].join(':');
+      studentVectorSaveInFlight = studentVectorSaveInFlight.catch(() => {}).then(async () => {
+        // Create the slide parent once so preview listeners and deletion routines can
+        // discover vector-only slides. Flush pending photo/raster work first.
+        if (studentVectorMarkerKey !== markerKey) {
+          await flushCanvasSaveToFirestore();
+          await slideRef.set({ studentDrawingFormat: 'normalized-v1' }, { merge: true });
+          studentVectorMarkerKey = markerKey;
+        }
+        await ref.set(payload, { merge: true });
+      });
+      return studentVectorSaveInFlight;
+    }
+
+    function scheduleStudentVectorSave(force = false) {
+      if (!isStudentVectorEditingContext()) return;
+      studentVectorDirty = true;
+      if (studentVectorSaveTimer && !force) return;
+      if (studentVectorSaveTimer) clearTimeout(studentVectorSaveTimer);
+      const delay = force ? 0 : Math.max(0, STUDENT_VECTOR_WRITE_MS - (Date.now() - studentVectorLastWriteAt));
+      studentVectorSaveTimer = setTimeout(() => {
+        studentVectorSaveTimer = null; studentVectorLastWriteAt = Date.now(); studentVectorDirty = false;
+        persistStudentVectorDrawings().catch(err => {
+          studentVectorDirty = true; console.error('Student vector save failed:', err);
+          showToast('Handwriting could not be saved. Keep this page open and retry.', 'error');
+        });
+      }, delay);
+    }
+
+    async function flushStudentVectorSave() {
+      if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
+      if (!studentVectorDirty) return studentVectorSaveInFlight;
+      studentVectorDirty = false;
+      const task = studentVectorSaveInFlight.catch(() => {}).then(() => persistStudentVectorDrawings())
+        .catch(err => {
+          studentVectorDirty = true;
+          showToast('Handwriting save failed: ' + (err?.message || 'Please retry.'), 'error');
+          throw err;
+        });
+      studentVectorSaveInFlight = task; await task; return task;
+    }
+
+    function handleStudentVectorPointerDown(e) {
+      if (multiTouchGestureActive) return;
+      if (!isStudentVectorEditingContext() || !canvasLoadReady || (isStylusOnlyMode && e.pointerType === 'touch')) return;
+      e.preventDefault();
+      const p = getCanvasCoordinates(e);
+      if (activeTool === 'text') {
+        openTextOverlayDialog('student-vector', p.x, p.y);
+        return;
+      }
+
+      if (activeTool !== 'eraser' && localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+        showToast('This slide has reached its handwriting limit.', 'error'); return;
+      }
+      beginCanvasAction();
+      isDrawing = true;
+      lastX = p.x; lastY = p.y;
+      studentVectorCanvas.setPointerCapture(e.pointerId);
+
+      if (activeTool === 'eraser') {
+        const eraserWidth = (Number(currentLineWidth) * 4) / (canvasZoom * mainCanvas.width);
+        studentVectorEraseGesture = {
+          radius: eraserWidth / 2,
+          points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }]
+        };
+        return;
+      }
+
+      studentVectorActiveStroke = { type: 'path', coordinateSpace: 'normalized-v1', tool: 'pen',
+        color: currentColor,
+        width: Number(currentLineWidth) / (canvasZoom * mainCanvas.width),
+        points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }] };
+      localStudentStrokes.push(studentVectorActiveStroke);
+      renderStudentVectorLayer();
+      scheduleStudentVectorSave(false);
+    }
+
+    function handleStudentVectorPointerMove(e) {
+      if (multiTouchGestureActive) return;
+      if ((!studentVectorActiveStroke && !studentVectorEraseGesture) || !isStudentVectorEditingContext()) return;
+      if (isStylusOnlyMode && e.pointerType === 'touch') return;
+      e.preventDefault();
+      const rect = canvasWrapper.getBoundingClientRect();
+      const samples = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+      (samples.length ? samples : [e]).forEach(sample => {
+        const p = getCanvasCoordinates(sample, rect);
+        if (studentVectorEraseGesture) {
+          studentVectorEraseGesture.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
+          // Keep the existing raster eraser behaviour for photos and flattened marks.
+          ctx.save();
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = (Number(currentLineWidth) * 4) / canvasZoom;
+          ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(p.x, p.y); ctx.stroke();
+          ctx.restore();
+          saveCanvasToFirestore();
+        } else {
+          const totalPoints = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
+          if (totalPoints < STUDENT_VECTOR_MAX_POINTS) {
+            studentVectorActiveStroke.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
+          }
+        }
+        lastX = p.x; lastY = p.y;
+      });
+      if (studentVectorActiveStroke) {
+        renderStudentVectorLayer();
+        scheduleStudentVectorSave(false);
+      }
+    }
+
+    function handleStudentVectorPointerUp(e) {
+      if (!studentVectorActiveStroke && !studentVectorEraseGesture) return;
+      const erasedVector = Boolean(studentVectorEraseGesture);
+      const eraseGesture = studentVectorEraseGesture;
+      studentVectorEraseGesture = null;
+      studentVectorActiveStroke = null;
+      isDrawing = false;
+      try { studentVectorCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (erasedVector) {
+        const changed = eraseStudentVectorStrokes(eraseGesture.points, eraseGesture.radius);
+        if (changed) {
+          renderStudentVectorLayer();
+          scheduleStudentVectorSave(false);
+        }
+        saveCanvasToFirestore();
+        return;
+      }
+      renderStudentVectorLayer();
+      scheduleStudentVectorSave(false);
+    }
+
+    function annotationAuthorId() {
+      // Teacher and peer-helper marks share one editable staff layer.
+      // A teacher can therefore correct or erase a peer helper's annotation.
+      return (currentUserRole === 'teacher' || activeHelpMode === 'helper' || activeHelpMode === 'teacher')
+        ? 'staff' : (signedInUser?.uid || '');
+    }
     function annotationSlideRef() {
       return db.collection('assignments').doc(currentAssignmentId)
         .collection('students').doc(inspectingStudentId || studentId)
@@ -1051,7 +1516,9 @@
     }
     function annotationPayload() {
       return {
-        authorUid: annotationAuthorId(),
+        // The Firestore document ID is the shared "staff" layer; this field
+        // must remain the actual authenticated UID for the security rules.
+        authorUid: signedInUser?.uid || '',
         role: currentUserRole === 'teacher' ? 'teacher' : 'peer',
         strokes: localAnnotationStrokes.slice(-ANNOTATION_MAX_STROKES),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -1121,17 +1588,13 @@
       });
     }
     function handleAnnotationPointerDown(e) {
+      if (multiTouchGestureActive) return;
       if (!canDrawVectorAnnotations() || (isStylusOnlyMode && e.pointerType === 'touch')) return;
       e.preventDefault();
       const p = getCanvasCoordinates(e);
       if (activeTool === 'text') {
-        const text = prompt('Enter annotation text:');
-        if (!text) return;
-        copyAnnotationSnapshot();
-        localAnnotationStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
-          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
-          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
-        renderAnnotationLayers(); scheduleVectorAnnotationSave(true); return;
+        openTextOverlayDialog('annotation', p.x, p.y);
+        return;
       }
       copyAnnotationSnapshot();
       annotationActiveStroke = {
@@ -1144,6 +1607,7 @@
       renderAnnotationLayers(); scheduleVectorAnnotationSave(true);
     }
     function handleAnnotationPointerMove(e) {
+      if (multiTouchGestureActive) return;
       if (!annotationActiveStroke || !canDrawVectorAnnotations()) return;
       if (isStylusOnlyMode && e.pointerType === 'touch') return;
       e.preventDefault();
@@ -1953,6 +2417,17 @@
       if (currentAssignmentId && currentAssignmentData) deleteTeacherAssignment(currentAssignmentId, currentAssignmentData);
     });
 
+    async function deleteSlideSubcollections(slideRef, collectionNames) {
+      for (const collectionName of collectionNames) {
+        const nested = await slideRef.collection(collectionName).get();
+        for (let i = 0; i < nested.docs.length; i += 400) {
+          const batch = db.batch();
+          nested.docs.slice(i, i + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+      }
+    }
+
     async function deleteTeacherAssignment(assignmentId, assignment) {
       const title = assignment?.title || 'this assignment';
       if (!window.confirm(`Delete "${title}" and ALL student work for it? This cannot be undone.`)) return;
@@ -1964,6 +2439,9 @@
         const students = await ref.collection('students').get();
         for (const studentDoc of students.docs) {
           const slides = await studentDoc.ref.collection('slides').get();
+          for (const slideDoc of slides.docs) {
+            await deleteSlideSubcollections(slideDoc.ref, ['studentDrawings', 'annotations']);
+          }
           for (let i = 0; i < slides.docs.length; i += 400) {
             const batch = db.batch(); slides.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref)); await batch.commit();
           }
@@ -1996,6 +2474,9 @@
       try {
         const studentRef = db.collection('assignments').doc(assignmentId).collection('students').doc(signedInUser.uid);
         const slides = await studentRef.collection('slides').get();
+        for (const slideDoc of slides.docs) {
+          await deleteSlideSubcollections(slideDoc.ref, ['studentDrawings']);
+        }
         for (let i = 0; i < slides.docs.length; i += 400) {
           const batch = db.batch(); slides.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref)); await batch.commit();
         }
@@ -2332,8 +2813,29 @@ async function loadAssignmentProgressCounts(assignment) {
       syncStudentPreviewListeners(studentsList);
     }
 
-    // Keep one live preview listener per joined student while the teacher roster is visible.
-    // Reuse existing listeners across roster rerenders and unsubscribe removed students.
+    function ensureStudentVectorPreviewCanvas(studentUid, key) {
+      const img = document.getElementById('thumb-' + studentUid);
+      const host = img?.parentElement;
+      if (!host) return null;
+      let canvas = host.querySelector('[data-student-vector-preview="' + studentUid + '"]');
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.dataset.studentVectorPreview = studentUid;
+        canvas.width = 400; canvas.height = 300;
+        Object.assign(canvas.style, {
+          position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+          height: '100%', width: 'auto', maxWidth: '100%', aspectRatio: '4 / 3',
+          zIndex: '2', pointerEvents: 'none'
+        });
+        host.appendChild(canvas);
+      }
+      drawStudentStrokesToContext(canvas.getContext('2d'), studentPreviewVectorData.get(key) || [], canvas.width, canvas.height);
+      return canvas;
+    }
+
+    // Keep one base-image and one small vector-document listener per joined student
+    // only while the teacher roster is visible. The vector overlay preserves the live
+    // thumbnail without flattening student handwriting back into Firestore image data.
     function syncStudentPreviewListeners(studentsList) {
       const activeKeys = new Set();
       if (!currentAssignmentId || !db || teacherDashboard.classList.contains('hidden')) {
@@ -2350,6 +2852,7 @@ async function loadAssignmentProgressCounts(assignment) {
         // Roster rerenders replace image elements; reuse the last live or archived preview.
         const cachedPreviewSource = studentPreviewData.get(key);
         if (img && cachedPreviewSource && img.getAttribute('src') !== cachedPreviewSource) img.src = cachedPreviewSource;
+        ensureStudentVectorPreviewCanvas(studentUid, key);
         if (studentPreviewUnsubscribers.has(key)) return;
         const unsubscribe = db.collection('assignments').doc(currentAssignmentId)
           .collection('students').doc(studentUid).collection('slides').doc('slide_0')
@@ -2357,6 +2860,17 @@ async function loadAssignmentProgressCounts(assignment) {
             const version = (studentPreviewVersions.get(key) || 0) + 1;
             studentPreviewVersions.set(key, version);
             const slideData = slideDoc.exists ? (slideDoc.data() || {}) : {};
+            if (slideData.studentDrawingFormat === 'normalized-v1' && !studentPreviewVectorUnsubscribers.has(key)) {
+              const vectorUnsubscribe = db.collection('assignments').doc(currentAssignmentId)
+                .collection('students').doc(studentUid).collection('slides').doc('slide_0')
+                .collection('studentDrawings').doc('student')
+                .onSnapshot(doc => {
+                  const data = doc.exists ? (doc.data() || {}) : {};
+                  studentPreviewVectorData.set(key, Array.isArray(data.strokes) ? data.strokes : []);
+                  ensureStudentVectorPreviewCanvas(studentUid, key);
+                }, err => console.warn('Student vector preview listener:', err));
+              studentPreviewVectorUnsubscribers.set(key, vectorUnsubscribe);
+            }
             let previewSource = slideData.canvasData || null;
 
             // Submitted canvases move to Storage and canvasData is removed from Firestore.
@@ -2398,11 +2912,20 @@ async function loadAssignmentProgressCounts(assignment) {
           studentPreviewData.delete(key);
         }
       });
+      studentPreviewVectorUnsubscribers.forEach((unsubscribe, key) => {
+        if (!activeKeys.has(key)) {
+          unsubscribe();
+          studentPreviewVectorUnsubscribers.delete(key);
+          studentPreviewVectorData.delete(key);
+        }
+      });
     }
 
     function stopStudentPreviewListeners() {
       studentPreviewUnsubscribers.forEach(unsubscribe => unsubscribe());
       studentPreviewUnsubscribers.clear();
+      studentPreviewVectorUnsubscribers.forEach(unsubscribe => unsubscribe());
+      studentPreviewVectorUnsubscribers.clear();
     }
 
     // Statistics aggregate every assignment roster, so refresh only while the panel is visible.
@@ -2889,6 +3412,7 @@ async function loadAssignmentProgressCounts(assignment) {
       try {
         // Flush any pending two-second canvas save before archiving the submission.
         await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
         await archiveStudentCanvasToStorage(currentAssignmentId, signedInUser.uid);
         const now = firebase.firestore.FieldValue.serverTimestamp();
         await db.collection('users').doc(signedInUser.uid).collection('submissions').doc(currentAssignmentId).set({
@@ -2961,8 +3485,16 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     document.getElementById('exitWorkspaceBtn').addEventListener('click', async () => {
+      try {
+        await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
+      } catch (err) {
+        showToast('Could not finish saving this slide. Stay on the page and retry.', 'error');
+        return;
+      }
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
       stopAnnotationListener();
+      stopStudentVectorListener();
       await navigateToPreviousStepScreen();
     });
 
@@ -2976,6 +3508,7 @@ async function loadAssignmentProgressCounts(assignment) {
       updateHistoryButtons();
       updateSlideNavigationUI();
       resizeCanvas();
+      ensureStudentVectorCanvas();
       ensureAnnotationCanvas();
       updatePeerHelpControls();
       loadCurrentSlideData();
@@ -3019,6 +3552,7 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('prevSlideBtn').addEventListener('click', async () => {
       if (currentSlideIndex > 0) {
         await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
         currentSlideIndex--;
         setupSlideWorkspace();
       }
@@ -3028,6 +3562,7 @@ async function loadAssignmentProgressCounts(assignment) {
       const totalSlides = currentAssignmentData?.slides?.length || 1;
       if (currentSlideIndex < totalSlides - 1) {
         await flushCanvasSaveToFirestore();
+        await flushStudentVectorSave();
         currentSlideIndex++;
         setupSlideWorkspace();
       }
@@ -3053,8 +3588,10 @@ async function loadAssignmentProgressCounts(assignment) {
       applyCanvasZoom();
 
       redrawBackgroundAndCanvas();
-      // Restore previous drawing buffer
+      // Restore the photo/legacy raster layer. Vector handwriting is redrawn from normalized points.
       ctx.drawImage(tempCanvas, 0, 0, mainCanvas.width, mainCanvas.height);
+      if (studentVectorCanvas) ensureStudentVectorCanvas();
+      if (annotationCanvas) ensureAnnotationCanvas();
     }
 
     window.addEventListener('resize', () => { resizeCanvas(); if (annotationCanvas) ensureAnnotationCanvas(); });
@@ -3088,13 +3625,18 @@ async function loadAssignmentProgressCounts(assignment) {
     let currentBgImage = null;
     // A helper must not draw or submit until the source slide image is fully decoded.
     let canvasLoadReady = true;
+    let canvasBaseLoadReady = true;
     let canvasLoadSequence = 0;
 
     function setCanvasLoadReady(ready) {
-      canvasLoadReady = Boolean(ready);
+      canvasBaseLoadReady = Boolean(ready);
+      canvasLoadReady = canvasBaseLoadReady && !studentVectorLoading && !studentVectorLoadFailed;
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
         && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
-      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked && !isVectorAnnotationContext()) ? 'auto' : 'none';
+      if (mainCanvas) mainCanvas.style.pointerEvents =
+        (canvasLoadReady && !requesterIsLocked && !isVectorAnnotationContext() && !isStudentVectorEditingContext()) ? 'auto' : 'none';
+      if (studentVectorCanvas) studentVectorCanvas.style.pointerEvents =
+        (canvasLoadReady && isStudentVectorEditingContext()) ? 'auto' : 'none';
       if (annotationCanvas) annotationCanvas.style.pointerEvents = (canvasLoadReady && canDrawVectorAnnotations()) ? 'auto' : 'none';
       const helperSubmit = document.getElementById('submitPeerHelpBtn');
       const teacherSubmit = document.getElementById('teacherSubmitPeerHelpBtn');
@@ -3175,6 +3717,7 @@ async function loadAssignmentProgressCounts(assignment) {
       if (!currentAssignmentId) return;
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
       stopAnnotationListener();
+      stopStudentVectorListener();
       const loadToken = ++canvasLoadSequence;
       const assignmentId = currentAssignmentId;
       const slideIndex = currentSlideIndex;
@@ -3236,7 +3779,10 @@ async function loadAssignmentProgressCounts(assignment) {
       // Every student workspace subscribes to its own annotation collection,
       // including in-progress work, so teacher feedback appears immediately.
       // Firestore rules restrict student reads to their own work.
-      if (targetStudentId) startAnnotationListener(targetStudentId);
+      if (targetStudentId) {
+        startStudentVectorListener(targetStudentId);
+        startAnnotationListener(targetStudentId);
+      }
       if (!targetStudentId) {
         setCanvasLoadReady(true);
         return;
@@ -3387,6 +3933,7 @@ async function loadAssignmentProgressCounts(assignment) {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         flushCanvasSaveToFirestore().catch(err => console.warn('Canvas flush on background failed:', err));
+        flushStudentVectorSave().catch(err => console.warn('Student vector flush on background failed:', err));
       }
     });
 
@@ -3414,8 +3961,13 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function captureCanvasState() {
       if (!mainCanvas.width || !mainCanvas.height) return null;
-      try { return ctx.getImageData(0, 0, mainCanvas.width, mainCanvas.height); }
-      catch (err) { console.warn('Could not capture canvas history:', err); return null; }
+      try {
+        const raster = ctx.getImageData(0, 0, mainCanvas.width, mainCanvas.height);
+        if (isStudentVectorEditingContext()) {
+          return { kind: 'student-composite', raster, strokes: JSON.parse(JSON.stringify(localStudentStrokes)) };
+        }
+        return raster;
+      } catch (err) { console.warn('Could not capture canvas history:', err); return null; }
     }
 
     function beginCanvasAction() {
@@ -3430,15 +3982,26 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function restoreCanvasState(state) {
       if (!state) return;
-      if (state.width !== mainCanvas.width || state.height !== mainCanvas.height) {
+      const rasterState = state.kind === 'student-composite' ? state.raster : state;
+      let rasterChanged = true;
+      if (state.kind === 'student-composite') {
+        const currentRaster = ctx.getImageData(0, 0, mainCanvas.width, mainCanvas.height);
+        rasterChanged = currentRaster.data.some((value, index) => value !== rasterState.data[index]);
+      }
+      if (rasterState.width !== mainCanvas.width || rasterState.height !== mainCanvas.height) {
         showToast('Undo history was reset because the canvas size changed.', 'info');
         undoStack = [];
         redoStack = [];
         updateHistoryButtons();
         return;
       }
-      ctx.putImageData(state, 0, 0);
-      saveCanvasToFirestore();
+      ctx.putImageData(rasterState, 0, 0);
+      if (state.kind === 'student-composite') {
+        localStudentStrokes = state.strokes || [];
+        renderStudentVectorLayer();
+        scheduleStudentVectorSave(true);
+      }
+      if (rasterChanged) saveCanvasToFirestore();
       updateHistoryButtons();
     }
 
@@ -3548,6 +4111,101 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
+    // Mobile-safe text entry: never use the browser's blocking prompt() from a
+    // canvas pointer event. Keep the tapped canvas position while the dialog is open.
+    const textOverlayModal = document.getElementById('textOverlayModal');
+    const textOverlayInput = document.getElementById('textOverlayInput');
+    const textOverlayForm = document.getElementById('textOverlayForm');
+    const textOverlayCancelBtn = document.getElementById('textOverlayCancelBtn');
+    let pendingTextOverlay = null;
+
+    function closeTextOverlayDialog() {
+      pendingTextOverlay = null;
+      textOverlayInput.value = '';
+      textOverlayModal.classList.add('hidden');
+      setTool('pen');
+    }
+
+    function openTextOverlayDialog(mode, x, y) {
+      if (!textOverlayModal || pendingTextOverlay) return;
+      pendingTextOverlay = { mode, x, y };
+      textOverlayInput.value = '';
+      textOverlayModal.classList.remove('hidden');
+      // Focus after the dialog is visible so mobile browsers open the keyboard
+      // against the actual in-page input rather than a native browser prompt.
+      requestAnimationFrame(() => {
+        if (pendingTextOverlay) {
+          textOverlayInput.focus();
+          textOverlayInput.setSelectionRange(0, textOverlayInput.value.length);
+        }
+      });
+    }
+
+    textOverlayForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!pendingTextOverlay) return;
+      const text = textOverlayInput.value.trim();
+      const target = pendingTextOverlay;
+      if (!text) {
+        closeTextOverlayDialog();
+        return;
+      }
+      if (text.length > 500) {
+        showToast('Text overlay must be 500 characters or fewer.', 'error');
+        textOverlayInput.focus();
+        return;
+      }
+
+      if (target.mode === 'student-vector') {
+        if (!isStudentVectorEditingContext() || localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+          showToast('This slide has reached its handwriting limit or is no longer editable.', 'error');
+          closeTextOverlayDialog();
+          return;
+        }
+        beginCanvasAction();
+        localStudentStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
+          x: target.x / mainCanvas.width, y: target.y / mainCanvas.height,
+          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
+        renderStudentVectorLayer();
+        scheduleStudentVectorSave(false);
+      } else if (target.mode === 'annotation') {
+        if (!canDrawVectorAnnotations()) {
+          showToast('Annotations are no longer editable in this view.', 'error');
+          closeTextOverlayDialog();
+          return;
+        }
+        copyAnnotationSnapshot();
+        localAnnotationStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
+          x: target.x / mainCanvas.width, y: target.y / mainCanvas.height,
+          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
+        renderAnnotationLayers();
+        scheduleVectorAnnotationSave(true);
+      } else {
+        if (!canvasLoadReady) {
+          showToast('Please wait for the saved canvas to finish loading.', 'info');
+          closeTextOverlayDialog();
+          return;
+        }
+        beginCanvasAction();
+        ctx.font = `${currentLineWidth * 4 + 12}px Inter, sans-serif`;
+        ctx.fillStyle = currentColor;
+        ctx.fillText(text, target.x, target.y);
+        saveCanvasToFirestore();
+      }
+      closeTextOverlayDialog();
+    });
+
+    textOverlayCancelBtn.addEventListener('click', closeTextOverlayDialog);
+    textOverlayModal.addEventListener('click', event => {
+      if (event.target === textOverlayModal) closeTextOverlayDialog();
+    });
+    textOverlayInput.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeTextOverlayDialog();
+      }
+    });
+
     const capturePhotoBtn = document.getElementById('capturePhotoBtn');
     const capturePhotoInput = document.getElementById('capturePhotoInput');
     const chooseImageBtn = document.getElementById('chooseImageBtn');
@@ -3630,6 +4288,16 @@ async function loadAssignmentProgressCounts(assignment) {
         if (!confirm('Clear your annotations on this slide? The original student work and other annotators’ strokes will remain unchanged.')) return;
         copyAnnotationSnapshot(); localAnnotationStrokes = []; renderAnnotationLayers(); scheduleVectorAnnotationSave(true); return;
       }
+      if (isStudentVectorEditingContext()) {
+        if (!window.confirm('Clear all writing and inserted photos on this slide? This action can be undone with Undo.')) return;
+        beginCanvasAction();
+        redrawBackgroundAndCanvas();
+        localStudentStrokes = [];
+        renderStudentVectorLayer();
+        saveCanvasToFirestore();
+        scheduleStudentVectorSave(true);
+        return;
+      }
       if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return;
@@ -3649,6 +4317,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function applyCanvasZoom() {
       mainCanvas.style.transform = `translate(${canvasPanX}px, ${canvasPanY}px) scale(${canvasZoom})`;
+      if (studentVectorCanvas) studentVectorCanvas.style.transform = mainCanvas.style.transform;
       if (annotationCanvas) annotationCanvas.style.transform = mainCanvas.style.transform;
       const label = document.getElementById('canvasZoomLabel');
       if (label) label.textContent = Math.round(canvasZoom * 100) + '%';
@@ -3677,6 +4346,57 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('canvasZoomInBtn').addEventListener('click', () => setCanvasZoom(canvasZoom + 0.25));
     document.getElementById('canvasZoomOutBtn').addEventListener('click', () => setCanvasZoom(canvasZoom - 0.25));
     document.getElementById('canvasZoomResetBtn').addEventListener('click', resetCanvasZoom);
+
+    // Track touch pointers at the wrapper's capture phase. This runs before
+    // a canvas receives pointerdown, so the second finger cannot start a stroke.
+    let multiTouchGestureActive = false;
+    const activeTouchPointers = new Set();
+
+    function cancelCanvasStrokeForGesture() {
+      if (annotationActiveStroke) {
+        if (localAnnotationStrokes[localAnnotationStrokes.length - 1] === annotationActiveStroke) {
+          localAnnotationStrokes.pop();
+        }
+        annotationActiveStroke = null;
+        if (annotationUndo.length) annotationUndo.pop();
+        renderAnnotationLayers();
+        updateAnnotationHistoryButtons();
+        scheduleVectorAnnotationSave(true);
+      } else if (studentVectorActiveStroke || studentVectorEraseGesture) {
+        const previous = undoStack.pop();
+        studentVectorActiveStroke = null;
+        studentVectorEraseGesture = null;
+        isDrawing = false;
+        if (previous) restoreCanvasState(previous);
+        updateHistoryButtons();
+      } else if (isDrawing) {
+        const previous = undoStack.pop();
+        isDrawing = false;
+        if (previous) restoreCanvasState(previous);
+        updateHistoryButtons();
+      }
+    }
+
+    canvasWrapper.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'touch') return;
+      activeTouchPointers.add(e.pointerId);
+      if (activeTouchPointers.size >= 2) {
+        multiTouchGestureActive = true;
+        cancelCanvasStrokeForGesture();
+      }
+    }, true);
+
+    function releaseTrackedTouchPointer(e) {
+      if (e.pointerType !== 'touch') return;
+      activeTouchPointers.delete(e.pointerId);
+      if (activeTouchPointers.size === 0) multiTouchGestureActive = false;
+    }
+    canvasWrapper.addEventListener('pointerup', releaseTrackedTouchPointer, true);
+    canvasWrapper.addEventListener('pointercancel', releaseTrackedTouchPointer, true);
+
+    // Prevent the browser from taking over the two-finger gesture. We handle
+    // pinch and pan ourselves while one-finger/stylus input remains for drawing.
+    canvasWrapper.style.touchAction = 'none';
 
     // Two-finger gestures support both pinch-to-zoom and drag-to-pan.
     // One-finger/stylus input remains available for writing.
@@ -3753,6 +4473,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
     // Advanced Pointer Events for Stylus / Apple Pencil + Palm Rejection Toggle
     function handlePointerDown(e) {
+      if (multiTouchGestureActive) return;
       if (!canvasLoadReady) {
         showToast('Please wait for the saved canvas to finish loading before drawing.', 'info');
         return;
@@ -3771,14 +4492,7 @@ async function loadAssignmentProgressCounts(assignment) {
       const coords = getCanvasCoordinates(e);
 
       if (activeTool === 'text') {
-        const text = prompt("Enter text overlay:");
-        if (text) {
-          beginCanvasAction();
-          ctx.font = `${currentLineWidth * 4 + 12}px Inter, sans-serif`;
-          ctx.fillStyle = currentColor;
-          ctx.fillText(text, coords.x, coords.y);
-          saveCanvasToFirestore();
-        }
+        openTextOverlayDialog('raster', coords.x, coords.y);
         return;
       }
 
@@ -3794,7 +4508,7 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     function handlePointerMove(e) {
-      if (!isDrawing) return;
+      if (multiTouchGestureActive || !isDrawing) return;
 
       // Filter touch points in Stylus Only mode during motion
       if (isStylusOnlyMode && e.pointerType === 'touch') {
@@ -3876,6 +4590,8 @@ async function loadAssignmentProgressCounts(assignment) {
       outputCtx.fillStyle = '#fff';
       outputCtx.fillRect(0, 0, output.width, output.height);
       outputCtx.drawImage(mainCanvas, 0, 0);
+      // Peer-help snapshots include student handwriting so helpers see the complete page.
+      if (studentVectorCanvas && localStudentStrokes.length) outputCtx.drawImage(studentVectorCanvas, 0, 0);
       return output.toDataURL('image/jpeg', 0.92);
     }
 
@@ -3925,7 +4641,12 @@ async function loadAssignmentProgressCounts(assignment) {
         penTool.classList.add('bg-indigo-600', 'text-white');
         penTool.classList.remove('bg-white', 'text-slate-700');
       }
-      if (mainCanvas) mainCanvas.style.pointerEvents = (requesterIsLocked || !canvasLoadReady || isVectorAnnotationContext()) ? 'none' : 'auto';
+      if (mainCanvas) mainCanvas.style.pointerEvents =
+        (requesterIsLocked || !canvasLoadReady || isVectorAnnotationContext() || isStudentVectorEditingContext()) ? 'none' : 'auto';
+      if (studentVectorCanvas) {
+        studentVectorCanvas.style.pointerEvents = (canvasLoadReady && isStudentVectorEditingContext()) ? 'auto' : 'none';
+        studentVectorCanvas.style.transform = mainCanvas.style.transform;
+      }
       if (annotationCanvas) { annotationCanvas.style.pointerEvents = canDrawVectorAnnotations() ? 'auto' : 'none'; annotationCanvas.style.transform = mainCanvas.style.transform; }
       if (submitHelper) submitHelper.disabled = !canvasLoadReady;
       if (submitTeacher) submitTeacher.disabled = !canvasLoadReady;
@@ -4410,6 +5131,10 @@ async function loadAssignmentProgressCounts(assignment) {
         showToast('You can request help while actively working on an assignment.', 'info');
         return;
       }
+      if (!canvasLoadReady) {
+        showToast('Wait until the saved canvas and handwriting finish loading before requesting help.', 'info');
+        return;
+      }
       const button = document.getElementById('createPeerHelpBtn');
       button.disabled = true;
       try {
@@ -4419,6 +5144,8 @@ async function loadAssignmentProgressCounts(assignment) {
         const now = firebase.firestore.FieldValue.serverTimestamp();
         const requestedMode = isPeerHelpEnabled() ? 'peer' : 'teacher';
         let finalMode = requestedMode;
+        // Commit pending vector handwriting before creating the help snapshot.
+        await flushStudentVectorSave();
         const canvasData = exportCanvasJpeg();
         const commitRequest = async mode => {
           const batch = db.batch();
