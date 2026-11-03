@@ -1177,9 +1177,11 @@
       beginCanvasAction();
       studentVectorActiveStroke = { type: 'path', coordinateSpace: 'normalized-v1', tool: activeTool,
         color: currentColor,
-        width: (activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth)) / mainCanvas.width,
+        width: (activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth)) / (canvasZoom * mainCanvas.width),
         points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }] };
       localStudentStrokes.push(studentVectorActiveStroke);
+      isDrawing = true;
+      lastX = p.x; lastY = p.y;
       studentVectorCanvas.setPointerCapture(e.pointerId);
       renderStudentVectorLayer();
       scheduleStudentVectorSave(false);
@@ -1197,14 +1199,29 @@
         if (totalPoints < STUDENT_VECTOR_MAX_POINTS) {
           studentVectorActiveStroke.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
         }
+        if (studentVectorActiveStroke.tool === 'eraser') {
+          ctx.save();
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = (Number(currentLineWidth) * 4) / canvasZoom;
+          ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(p.x, p.y); ctx.stroke();
+          ctx.restore();
+        }
+        lastX = p.x; lastY = p.y;
       });
-      renderStudentVectorLayer(); scheduleStudentVectorSave(false);
+      renderStudentVectorLayer();
+      if (studentVectorActiveStroke.tool === 'eraser') saveCanvasToFirestore();
+      scheduleStudentVectorSave(false);
     }
 
     function handleStudentVectorPointerUp(e) {
       if (!studentVectorActiveStroke) return;
+      const wasRasterEraser = studentVectorActiveStroke.tool === 'eraser';
       studentVectorActiveStroke = null;
+      isDrawing = false;
       try { studentVectorCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (wasRasterEraser) saveCanvasToFirestore();
       renderStudentVectorLayer(); scheduleStudentVectorSave(false);
     }
 
