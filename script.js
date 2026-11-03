@@ -648,6 +648,9 @@
     // keeps this state scoped to the current tab and avoids stale cross-session reopening.
     const STEP_SCREEN_STATE_KEY = 'step_screen_state_v1';
     const STEP_SCREEN_HISTORY_KEY = 'step_screen_history_v1';
+    // Dedicated return target for the in-app "Back to Dashboard" control.
+    // Kept separate from navigation history so this control never behaves like Back.
+    const STEP_DASHBOARD_RETURN_KEY = 'step_dashboard_return_v1';
     let restoringStepScreen = false;
     let navigatingStepHistory = false;
 
@@ -686,6 +689,11 @@
         savedAt: Date.now()
       };
       try {
+        // Keep the most recently viewed dashboard as a dedicated return target.
+        // This is refreshed immediately before workspace entry, including its scroll position.
+        if (state.screen === 'teacher-dashboard' || state.screen === 'student-history') {
+          sessionStorage.setItem(STEP_DASHBOARD_RETURN_KEY, JSON.stringify(state));
+        }
         const previous = JSON.parse(sessionStorage.getItem(STEP_SCREEN_STATE_KEY) || 'null');
         let stack = JSON.parse(sessionStorage.getItem(STEP_SCREEN_HISTORY_KEY) || '[]');
         if (!Array.isArray(stack)) stack = [];
@@ -742,6 +750,37 @@
       } finally {
         navigatingStepHistory = false;
       }
+    }
+
+    // "Back to Dashboard" is deliberately not browser/app-history navigation.
+    // It restores the last dashboard screen and its captured scroll position directly.
+    async function returnToLastDashboard() {
+      if (!signedInUser) return;
+      let dashboardState = null;
+      try {
+        dashboardState = JSON.parse(sessionStorage.getItem(STEP_DASHBOARD_RETURN_KEY) || 'null');
+      } catch (err) { console.warn('Could not read dashboard return state:', err); }
+
+      const validDashboard = dashboardState
+        && dashboardState.uid === signedInUser.uid
+        && (dashboardState.screen === 'teacher-dashboard' || dashboardState.screen === 'student-history')
+        && (dashboardState.screen !== 'teacher-dashboard' || accountRole === 'teacher');
+
+      if (validDashboard) {
+        dashboardState.savedAt = Date.now();
+        try { sessionStorage.setItem(STEP_SCREEN_STATE_KEY, JSON.stringify(dashboardState)); }
+        catch (err) { console.warn('Could not stage dashboard restoration:', err); }
+        const restored = await restoreStepScreenState();
+        if (restored) {
+          requestAnimationFrame(() => window.scrollTo(0, Math.max(0, Number(dashboardState.scrollY) || 0)));
+          return;
+        }
+      }
+
+      // Safe fallback if the saved dashboard target is missing or cannot be restored.
+      if (currentUserRole === 'teacher' && accountRole === 'teacher') await switchRole('teacher');
+      else await switchRole('student');
+      requestAnimationFrame(() => window.scrollTo(0, validDashboard ? Math.max(0, Number(dashboardState.scrollY) || 0) : 0));
     }
 
     function readStepScreenState() {
@@ -3495,7 +3534,7 @@ async function loadAssignmentProgressCounts(assignment) {
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
       stopAnnotationListener();
       stopStudentVectorListener();
-      await navigateToPreviousStepScreen();
+      await returnToLastDashboard();
     });
 
     // ==========================================
@@ -5346,6 +5385,8 @@ async function loadAssignmentProgressCounts(assignment) {
         // Open the same full workspace used by the teacher's normal "View Work" action.
         // Teacher annotations save directly to the requester's real slide document.
         window.currentInspectedStudentRecord = { studentUid: requesterUid, id: requesterUid, status: currentSubmissionStatus };
+        // Capture the teacher dashboard and its current scroll position before opening help work.
+        saveStepScreenState();
         stopStudentPreviewListeners();
         teacherDashboard.classList.add('hidden');
         studentJoinScreen.classList.add('hidden');
