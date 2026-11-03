@@ -1112,7 +1112,7 @@
       const points = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
       const bytes = new Blob([JSON.stringify(localStudentStrokes)]).size;
       if (localStudentStrokes.length > STUDENT_VECTOR_MAX_STROKES || points > STUDENT_VECTOR_MAX_POINTS || bytes > 700 * 1024) {
-        throw new Error('Handwriting limit reached for this slide. Remove older strokes before continuing.');
+        return Promise.reject(new Error('Handwriting limit reached for this slide. Remove older strokes before continuing.'));
       }
       const ref = studentVectorSlideRef(signedInUser.uid).collection('studentDrawings').doc('student');
       const payload = { ownerUid: signedInUser.uid, format: 'normalized-v1',
