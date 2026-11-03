@@ -1041,18 +1041,15 @@
       renderStudentVectorLayer();
     }
 
-    function renderStudentVectorLayer() {
-      if (!studentVectorCtx || !studentVectorCanvas) return;
-      const width = studentVectorCanvas.width, height = studentVectorCanvas.height;
-      studentVectorCtx.clearRect(0, 0, width, height);
-      (localStudentStrokes || []).forEach(stroke => {
+    function drawStudentStrokesToContext(targetCtx, strokes, width, height) {
+      targetCtx.clearRect(0, 0, width, height);
+      (strokes || []).forEach(stroke => {
         if (stroke.type === 'text') {
-          const scale = width;
-          const textScale = scale / 1000;
-          studentVectorCtx.globalCompositeOperation = 'source-over';
-          studentVectorCtx.font = (Number(stroke.width || 0.004) * scale * 4 + 12 * textScale) + 'px Inter, sans-serif';
-          studentVectorCtx.fillStyle = stroke.color || '#1e293b';
-          studentVectorCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0) * width, Number(stroke.y || 0) * height);
+          const textScale = width / 1000;
+          targetCtx.globalCompositeOperation = 'source-over';
+          targetCtx.font = (Number(stroke.width || 0.004) * width * 4 + 12 * textScale) + 'px Inter, sans-serif';
+          targetCtx.fillStyle = stroke.color || '#1e293b';
+          targetCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0) * width, Number(stroke.y || 0) * height);
           return;
         }
         const points = Array.isArray(stroke.points) ? stroke.points.map(point => ({
@@ -1060,16 +1057,22 @@
           y: Number(Array.isArray(point) ? point[1] : point?.y) * height
         })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
         if (!points.length) return;
-        studentVectorCtx.save();
-        studentVectorCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
-        studentVectorCtx.strokeStyle = stroke.color || '#1e293b';
-        studentVectorCtx.lineWidth = Math.max(1, Number(stroke.width || 0.004) * width);
-        studentVectorCtx.lineCap = 'round'; studentVectorCtx.lineJoin = 'round';
-        studentVectorCtx.beginPath(); studentVectorCtx.moveTo(points[0].x, points[0].y);
-        if (points.length === 1) studentVectorCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
-        else for (let i = 1; i < points.length; i++) studentVectorCtx.lineTo(points[i].x, points[i].y);
-        studentVectorCtx.stroke(); studentVectorCtx.restore();
+        targetCtx.save();
+        targetCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+        targetCtx.strokeStyle = stroke.color || '#1e293b';
+        targetCtx.lineWidth = Math.max(1, Number(stroke.width || 0.004) * width);
+        targetCtx.lineCap = 'round'; targetCtx.lineJoin = 'round';
+        targetCtx.beginPath(); targetCtx.moveTo(points[0].x, points[0].y);
+        if (points.length === 1) targetCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
+        else for (let i = 1; i < points.length; i++) targetCtx.lineTo(points[i].x, points[i].y);
+        targetCtx.stroke(); targetCtx.restore();
       });
+    }
+
+    function renderStudentVectorLayer() {
+      if (!studentVectorCtx || !studentVectorCanvas) return;
+      drawStudentStrokesToContext(studentVectorCtx, localStudentStrokes,
+        studentVectorCanvas.width, studentVectorCanvas.height);
     }
 
     function stopStudentVectorListener() {
