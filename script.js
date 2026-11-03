@@ -1155,7 +1155,11 @@
       if (!studentVectorDirty) return studentVectorSaveInFlight;
       studentVectorDirty = false;
       const task = studentVectorSaveInFlight.catch(() => {}).then(() => persistStudentVectorDrawings())
-        .catch(err => { studentVectorDirty = true; throw err; });
+        .catch(err => {
+          studentVectorDirty = true;
+          showToast('Handwriting save failed: ' + (err?.message || 'Please retry.'), 'error');
+          throw err;
+        });
       studentVectorSaveInFlight = task; await task; return task;
     }
 
