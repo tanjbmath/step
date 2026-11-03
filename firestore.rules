@@ -630,6 +630,22 @@ service cloud.firestore {
         match /slides/{slideId} {
           allow read: if isOwner(studentUid) || ownsAssignment(assignmentId)
             || isActivePeerHelper(assignmentId, studentUid);
+          match /annotations/{authorUid} {
+            allow read: if isOwner(studentUid) || ownsAssignment(assignmentId)
+              || isActivePeerHelper(assignmentId, studentUid);
+            allow create, update: if request.auth != null
+              && authorUid == request.auth.uid
+              && request.resource.data.authorUid == request.auth.uid
+              && request.resource.data.keys().hasOnly(['authorUid', 'role', 'strokes', 'updatedAt'])
+              && request.resource.data.strokes is list
+              && request.resource.data.strokes.size() <= 300
+              && (
+                (ownsAssignment(assignmentId) && request.resource.data.role == 'teacher')
+                || (isActivePeerHelper(assignmentId, studentUid) && request.resource.data.role == 'peer')
+              );
+            allow delete: if request.auth != null && authorUid == request.auth.uid
+              && (ownsAssignment(assignmentId) || isActivePeerHelper(assignmentId, studentUid));
+          }
           allow create, update: if (
               isOwner(studentUid)
               && isAssignmentMember(assignmentId, studentUid)

@@ -930,6 +930,240 @@
     const ctx = mainCanvas.getContext('2d');
     const canvasWrapper = document.getElementById('canvasWrapper');
 
+    // Submitted student work is immutable. Review annotations live in a separate
+    // transparent canvas and in one Firestore document per annotator and slide.
+    let annotationCanvas = null;
+    let annotationCtx = null;
+    let unsubAnnotations = null;
+    let annotationRecords = new Map();
+    let localAnnotationStrokes = [];
+    let annotationUndo = [];
+    let annotationRedo = [];
+    let annotationActiveStroke = null;
+    let annotationSaveTimer = null;
+    let annotationSaveInFlight = Promise.resolve();
+    let annotationLastWriteAt = 0;
+    let annotationLoadKey = '';
+    const ANNOTATION_LIVE_WRITE_MS = 450;
+    const ANNOTATION_MAX_STROKES = 300;
+    const ANNOTATION_MAX_POINTS = 18000;
+
+    function isVectorAnnotationContext() {
+      return Boolean(inspectingStudentId && signedInUser
+        && (currentUserRole === 'teacher' || activeHelpMode === 'helper' || activeHelpMode === 'teacher'));
+    }
+    function canDrawVectorAnnotations() {
+      return isVectorAnnotationContext() && canvasLoadReady && Boolean(currentAssignmentId);
+    }
+    function ensureAnnotationCanvas() {
+      if (!annotationCanvas) {
+        annotationCanvas = document.createElement('canvas');
+        annotationCanvas.id = 'annotationCanvas';
+        annotationCanvas.setAttribute('aria-label', 'Teacher and peer annotations');
+        Object.assign(annotationCanvas.style, {
+          position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
+          zIndex: '2', touchAction: 'none', pointerEvents: 'none',
+          transformOrigin: '0 0'
+        });
+        canvasWrapper.appendChild(annotationCanvas);
+        annotationCtx = annotationCanvas.getContext('2d');
+        annotationCanvas.addEventListener('pointerdown', handleAnnotationPointerDown);
+        annotationCanvas.addEventListener('pointermove', handleAnnotationPointerMove);
+        annotationCanvas.addEventListener('pointerup', handleAnnotationPointerUp);
+        annotationCanvas.addEventListener('pointercancel', handleAnnotationPointerUp);
+      }
+      if (annotationCanvas.width !== mainCanvas.width || annotationCanvas.height !== mainCanvas.height) {
+        annotationCanvas.width = mainCanvas.width;
+        annotationCanvas.height = mainCanvas.height;
+        renderAnnotationLayers();
+      }
+      const writable = canDrawVectorAnnotations();
+      annotationCanvas.style.pointerEvents = writable ? 'auto' : 'none';
+      annotationCanvas.style.display = (inspectingStudentId || annotationRecords.size) ? 'block' : 'none';
+      annotationCanvas.style.transform = mainCanvas.style.transform;
+      mainCanvas.style.pointerEvents = isVectorAnnotationContext() ? 'none' : mainCanvas.style.pointerEvents;
+    }
+    function annotationAuthorId() { return signedInUser?.uid || ''; }
+    function annotationSlideRef() {
+      return db.collection('assignments').doc(currentAssignmentId)
+        .collection('students').doc(inspectingStudentId || studentId)
+        .collection('slides').doc('slide_' + currentSlideIndex);
+    }
+    function copyAnnotationSnapshot() {
+      annotationUndo.push(JSON.stringify(localAnnotationStrokes));
+      if (annotationUndo.length > 50) annotationUndo.shift();
+      annotationRedo = [];
+      updateAnnotationHistoryButtons();
+    }
+    function updateAnnotationHistoryButtons() {
+      if (!isVectorAnnotationContext()) return;
+      undoCanvasBtn.disabled = annotationUndo.length === 0;
+      redoCanvasBtn.disabled = annotationRedo.length === 0;
+    }
+    function renderAnnotationLayers() {
+      if (!annotationCtx || !annotationCanvas) return;
+      annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+      // Render each author's strokes on an isolated temporary layer so one author's
+      // eraser cannot remove another author's annotations.
+      const layers = new Map(annotationRecords);
+      if (annotationAuthorId()) layers.set(annotationAuthorId(), localAnnotationStrokes);
+      for (const strokes of layers.values()) {
+        const layer = document.createElement('canvas');
+        layer.width = annotationCanvas.width; layer.height = annotationCanvas.height;
+        const layerCtx = layer.getContext('2d');
+        (strokes || []).forEach(stroke => {
+          const normalized = stroke.coordinateSpace === 'normalized-v1';
+          const scaleX = normalized ? annotationCanvas.width : 1;
+          const scaleY = normalized ? annotationCanvas.height : 1;
+          const scaleSize = normalized ? annotationCanvas.width : 1;
+          if (stroke.type === 'text') {
+            layerCtx.globalCompositeOperation = 'source-over';
+            const textWidth = Number(stroke.width || 4) * (normalized ? scaleSize : 1);
+            const textScale = normalized ? scaleSize / 1000 : 1;
+            layerCtx.font = (textWidth * 4 + 12 * textScale) + 'px Inter, sans-serif';
+            layerCtx.fillStyle = stroke.color || '#dc2626';
+            layerCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0) * scaleX, Number(stroke.y || 0) * scaleY);
+            return;
+          }
+          // Firestore-compatible vector points are plain objects, not nested arrays.
+          // Read legacy tuple points defensively so previously stored annotations remain renderable.
+          const points = Array.isArray(stroke.points) ? stroke.points.map(point => {
+            const x = Number(Array.isArray(point) ? point[0] : point?.x);
+            const y = Number(Array.isArray(point) ? point[1] : point?.y);
+            return { x: x * scaleX, y: y * scaleY };
+          }).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
+          if (!points.length) return;
+          layerCtx.save();
+          layerCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+          layerCtx.strokeStyle = stroke.color || '#dc2626';
+          layerCtx.lineWidth = Math.max(1, Number(stroke.width || 4) * scaleSize);
+          layerCtx.lineCap = 'round'; layerCtx.lineJoin = 'round';
+          layerCtx.beginPath(); layerCtx.moveTo(points[0].x, points[0].y);
+          if (points.length === 1) {
+            layerCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
+          } else {
+            for (let i = 1; i < points.length; i++) layerCtx.lineTo(points[i].x, points[i].y);
+          }
+          layerCtx.stroke(); layerCtx.restore();
+        });
+        annotationCtx.drawImage(layer, 0, 0);
+      }
+    }
+    function annotationPayload() {
+      return {
+        authorUid: annotationAuthorId(),
+        role: currentUserRole === 'teacher' ? 'teacher' : 'peer',
+        strokes: localAnnotationStrokes.slice(-ANNOTATION_MAX_STROKES),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+    }
+    function persistVectorAnnotations() {
+      if (!canDrawVectorAnnotations() || !db || !annotationAuthorId()) return Promise.resolve();
+      const totalPoints = localAnnotationStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
+      const estimatedBytes = new Blob([JSON.stringify(localAnnotationStrokes)]).size;
+      if (localAnnotationStrokes.length > ANNOTATION_MAX_STROKES
+          || totalPoints > ANNOTATION_MAX_POINTS
+          || estimatedBytes > 700 * 1024) {
+        showToast('Annotation limit reached for this slide. Remove older strokes before continuing.', 'error');
+        return Promise.resolve();
+      }
+      const ref = annotationSlideRef().collection('annotations').doc(annotationAuthorId());
+      const payload = annotationPayload();
+      annotationSaveInFlight = annotationSaveInFlight.catch(() => {}).then(() => ref.set(payload, { merge: true }));
+      return annotationSaveInFlight;
+    }
+    function scheduleVectorAnnotationSave(force = false) {
+      if (!canDrawVectorAnnotations()) return;
+      if (annotationSaveTimer && !force) return;
+      if (annotationSaveTimer) clearTimeout(annotationSaveTimer);
+      const elapsed = Date.now() - annotationLastWriteAt;
+      const delay = force ? 0 : Math.max(0, ANNOTATION_LIVE_WRITE_MS - elapsed);
+      annotationSaveTimer = setTimeout(() => {
+        annotationSaveTimer = null;
+        annotationLastWriteAt = Date.now();
+        persistVectorAnnotations().catch(err => {
+          console.error('Vector annotation save failed:', err);
+          showToast('Annotation could not be saved. The original student work remains unchanged.', 'error');
+        });
+      }, delay);
+    }
+    function stopAnnotationListener() {
+      if (unsubAnnotations) { unsubAnnotations(); unsubAnnotations = null; }
+      if (annotationSaveTimer) { clearTimeout(annotationSaveTimer); annotationSaveTimer = null; }
+      annotationRecords = new Map(); localAnnotationStrokes = [];
+      annotationUndo = []; annotationRedo = []; annotationActiveStroke = null;
+      annotationLoadKey = '';
+      if (annotationCtx && annotationCanvas) annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+    }
+    function startAnnotationListener(targetUid) {
+      if (!db || !currentAssignmentId || !targetUid) return;
+      const key = [currentAssignmentId, targetUid, currentSlideIndex].join(':');
+      if (annotationLoadKey === key) return;
+      stopAnnotationListener(); annotationLoadKey = key;
+      ensureAnnotationCanvas();
+      const collection = db.collection('assignments').doc(currentAssignmentId)
+        .collection('students').doc(targetUid).collection('slides').doc('slide_' + currentSlideIndex)
+        .collection('annotations');
+      unsubAnnotations = collection.onSnapshot(snapshot => {
+        const next = new Map();
+        snapshot.docs.forEach(doc => {
+          const data = doc.data() || {};
+          if (doc.id !== annotationAuthorId()) next.set(doc.id, Array.isArray(data.strokes) ? data.strokes : []);
+          else if (!annotationActiveStroke) localAnnotationStrokes = Array.isArray(data.strokes) ? data.strokes : [];
+        });
+        annotationRecords = next;
+        ensureAnnotationCanvas();
+        renderAnnotationLayers();
+        updateAnnotationHistoryButtons();
+      }, err => {
+        console.warn('Annotation listener failed:', err);
+        showToast('Could not sync annotations for this slide.', 'error');
+      });
+    }
+    function handleAnnotationPointerDown(e) {
+      if (!canDrawVectorAnnotations() || (isStylusOnlyMode && e.pointerType === 'touch')) return;
+      e.preventDefault();
+      const p = getCanvasCoordinates(e);
+      if (activeTool === 'text') {
+        const text = prompt('Enter annotation text:');
+        if (!text) return;
+        copyAnnotationSnapshot();
+        localAnnotationStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
+          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
+          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
+        renderAnnotationLayers(); scheduleVectorAnnotationSave(true); return;
+      }
+      copyAnnotationSnapshot();
+      annotationActiveStroke = {
+        type: 'path', coordinateSpace: 'normalized-v1', tool: activeTool, color: currentColor,
+        width: (activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth)) / mainCanvas.width,
+        points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }]
+      };
+      localAnnotationStrokes.push(annotationActiveStroke);
+      annotationCanvas.setPointerCapture(e.pointerId);
+      renderAnnotationLayers(); scheduleVectorAnnotationSave(true);
+    }
+    function handleAnnotationPointerMove(e) {
+      if (!annotationActiveStroke || !canDrawVectorAnnotations()) return;
+      if (isStylusOnlyMode && e.pointerType === 'touch') return;
+      e.preventDefault();
+      const samples = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+      (samples.length ? samples : [e]).forEach(sample => {
+        const p = getCanvasCoordinates(sample);
+        const pts = annotationActiveStroke.points;
+        if (pts.length < ANNOTATION_MAX_POINTS) pts.push({
+          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height
+        });
+      });
+      renderAnnotationLayers(); scheduleVectorAnnotationSave(false);
+    }
+    function handleAnnotationPointerUp(e) {
+      if (!annotationActiveStroke) return;
+      annotationActiveStroke = null;
+      try { annotationCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      renderAnnotationLayers(); scheduleVectorAnnotationSave(true);
+    }
+
     document.getElementById('toggleTeacherStudentStatsBtn').addEventListener('click', () => {
       const panel = document.getElementById('teacherStudentStatsPanel');
       const button = document.getElementById('toggleTeacherStudentStatsBtn');
@@ -1132,10 +1366,16 @@
         activeClassBadge.textContent = 'Class: ' + getClassDisplayName(currentClassId);
         activeClassBadge.classList.remove('hidden');
       }
+      // A role/dashboard transition must never leave the canvas workspace visible.
+      // The workspace is a separate screen and must be hidden before either dashboard
+      // or student history/join UI is shown.
+      workspaceScreen.classList.add('hidden');
+      teacherDashboard.classList.add('hidden');
+      studentJoinScreen.classList.add('hidden');
+      studentHistoryScreen.classList.add('hidden');
       document.getElementById('classSelectionScreen').classList.add('hidden');
       roleSelectionScreen.classList.add('hidden');
       saveStepScreenState();
-      studentHistoryScreen.classList.add('hidden');
       resetRoleBtn.classList.remove('hidden');
 
       if (role === 'teacher') {
@@ -2722,6 +2962,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     document.getElementById('exitWorkspaceBtn').addEventListener('click', async () => {
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
+      stopAnnotationListener();
       await navigateToPreviousStepScreen();
     });
 
@@ -2735,6 +2976,7 @@ async function loadAssignmentProgressCounts(assignment) {
       updateHistoryButtons();
       updateSlideNavigationUI();
       resizeCanvas();
+      ensureAnnotationCanvas();
       updatePeerHelpControls();
       loadCurrentSlideData();
       startPeerHelpListeners();
@@ -2815,7 +3057,7 @@ async function loadAssignmentProgressCounts(assignment) {
       ctx.drawImage(tempCanvas, 0, 0, mainCanvas.width, mainCanvas.height);
     }
 
-    window.addEventListener('resize', resizeCanvas);
+    window.addEventListener('resize', () => { resizeCanvas(); if (annotationCanvas) ensureAnnotationCanvas(); });
 
     const canvasFullscreenBtn = document.getElementById('canvasFullscreenBtn');
     function updateFullscreenButton() {
@@ -2852,7 +3094,8 @@ async function loadAssignmentProgressCounts(assignment) {
       canvasLoadReady = Boolean(ready);
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
         && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
-      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked) ? 'auto' : 'none';
+      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked && !isVectorAnnotationContext()) ? 'auto' : 'none';
+      if (annotationCanvas) annotationCanvas.style.pointerEvents = (canvasLoadReady && canDrawVectorAnnotations()) ? 'auto' : 'none';
       const helperSubmit = document.getElementById('submitPeerHelpBtn');
       const teacherSubmit = document.getElementById('teacherSubmitPeerHelpBtn');
       if (helperSubmit) helperSubmit.disabled = !canvasLoadReady;
@@ -2931,6 +3174,7 @@ async function loadAssignmentProgressCounts(assignment) {
     function loadCurrentSlideData() {
       if (!currentAssignmentId) return;
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
+      stopAnnotationListener();
       const loadToken = ++canvasLoadSequence;
       const assignmentId = currentAssignmentId;
       const slideIndex = currentSlideIndex;
@@ -2970,7 +3214,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
       // Helpers must work on the requester's submitted canvas, not their own completed work.
       if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)
-          && (!inspectingStudentId || activeHelpMode === 'helper')) {
+          && !inspectingStudentId) {
         const requestId = activeHelpRequestId;
         unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('helpRequests').doc(requestId)
@@ -2989,6 +3233,10 @@ async function loadAssignmentProgressCounts(assignment) {
       }
 
       const targetStudentId = inspectingStudentId || studentId;
+      // Every student workspace subscribes to its own annotation collection,
+      // including in-progress work, so teacher feedback appears immediately.
+      // Firestore rules restrict student reads to their own work.
+      if (targetStudentId) startAnnotationListener(targetStudentId);
       if (!targetStudentId) {
         setCanvasLoadReady(true);
         return;
@@ -3022,6 +3270,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function saveCanvasToFirestore() {
       const targetStudentId = inspectingStudentId || studentId;
+      if (isVectorAnnotationContext()) { scheduleVectorAnnotationSave(true); return; }
       if (!currentAssignmentId || !targetStudentId) return;
       canvasSaveDirty = true;
       if (saveTimeout === null) {
@@ -3047,6 +3296,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const assignmentId = currentAssignmentId;
         const slideIndex = currentSlideIndex;
         if (!assignmentId) return;
+        if (isVectorAnnotationContext()) { await persistVectorAnnotations(); return; }
         if (!targetStudentId && !(activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode))) return;
 
         const exportCanvas = document.createElement('canvas');
@@ -3193,6 +3443,12 @@ async function loadAssignmentProgressCounts(assignment) {
     }
 
     undoCanvasBtn.addEventListener('click', () => {
+      if (isVectorAnnotationContext()) {
+        if (!annotationUndo.length) return;
+        annotationRedo.push(JSON.stringify(localAnnotationStrokes));
+        localAnnotationStrokes = JSON.parse(annotationUndo.pop());
+        renderAnnotationLayers(); updateAnnotationHistoryButtons(); scheduleVectorAnnotationSave(true); return;
+      }
       if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) return;
       if (!undoStack.length) return;
       const current = captureCanvasState();
@@ -3202,6 +3458,12 @@ async function loadAssignmentProgressCounts(assignment) {
     });
 
     redoCanvasBtn.addEventListener('click', () => {
+      if (isVectorAnnotationContext()) {
+        if (!annotationRedo.length) return;
+        annotationUndo.push(JSON.stringify(localAnnotationStrokes));
+        localAnnotationStrokes = JSON.parse(annotationRedo.pop());
+        renderAnnotationLayers(); updateAnnotationHistoryButtons(); scheduleVectorAnnotationSave(true); return;
+      }
       if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) return;
       if (!redoStack.length) return;
       const current = captureCanvasState();
@@ -3364,6 +3626,10 @@ async function loadAssignmentProgressCounts(assignment) {
     chooseImageInput.addEventListener('change', handleImageFileChange);
 
     document.getElementById('clearCanvasBtn').addEventListener('click', () => {
+      if (isVectorAnnotationContext()) {
+        if (!confirm('Clear your annotations on this slide? The original student work and other annotators’ strokes will remain unchanged.')) return;
+        copyAnnotationSnapshot(); localAnnotationStrokes = []; renderAnnotationLayers(); scheduleVectorAnnotationSave(true); return;
+      }
       if (currentUserRole === 'student' && currentSubmissionStatus !== 'in-progress' && !['helper', 'teacher'].includes(activeHelpMode)) {
         showToast('This assignment is read-only until your teacher requests amendments.', 'info');
         return;
@@ -3383,6 +3649,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
     function applyCanvasZoom() {
       mainCanvas.style.transform = `translate(${canvasPanX}px, ${canvasPanY}px) scale(${canvasZoom})`;
+      if (annotationCanvas) annotationCanvas.style.transform = mainCanvas.style.transform;
       const label = document.getElementById('canvasZoomLabel');
       if (label) label.textContent = Math.round(canvasZoom * 100) + '%';
     }
@@ -3642,7 +3909,7 @@ async function loadAssignmentProgressCounts(assignment) {
       ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn', 'prevSlideBtn', 'nextSlideBtn'].forEach(id => {
         const control = document.getElementById(id);
         if (control) {
-          control.disabled = requesterIsLocked || (restrictedHelpMode && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
+          control.disabled = requesterIsLocked || (isVectorAnnotationContext() && ['capturePhotoBtn', 'chooseImageBtn'].includes(id)) || (restrictedHelpMode && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
         }
       });
       // Peer helpers use a fixed rose-colour pen. Teachers inspecting student work
@@ -3658,7 +3925,8 @@ async function loadAssignmentProgressCounts(assignment) {
         penTool.classList.add('bg-indigo-600', 'text-white');
         penTool.classList.remove('bg-white', 'text-slate-700');
       }
-      if (mainCanvas) mainCanvas.style.pointerEvents = (requesterIsLocked || !canvasLoadReady) ? 'none' : 'auto';
+      if (mainCanvas) mainCanvas.style.pointerEvents = (requesterIsLocked || !canvasLoadReady || isVectorAnnotationContext()) ? 'none' : 'auto';
+      if (annotationCanvas) { annotationCanvas.style.pointerEvents = canDrawVectorAnnotations() ? 'auto' : 'none'; annotationCanvas.style.transform = mainCanvas.style.transform; }
       if (submitHelper) submitHelper.disabled = !canvasLoadReady;
       if (submitTeacher) submitTeacher.disabled = !canvasLoadReady;
       const askButton = document.getElementById('askForHelpBtn');
@@ -4418,6 +4686,7 @@ async function loadAssignmentProgressCounts(assignment) {
     async function saveActiveHelpCanvasNow() {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
       if (!canvasLoadReady) throw new Error('The original student canvas has not finished loading. Nothing was saved.');
+      if (isVectorAnnotationContext()) { await persistVectorAnnotations(); return; }
       clearTimeout(saveTimeout);
       saveTimeout = null;
       // Cancel queued Firestore draft writes and wait for any write already in flight.
