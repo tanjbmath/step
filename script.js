@@ -691,6 +691,15 @@
           && (!stack.length || getStepScreenKey(stack[stack.length - 1]) !== getStepScreenKey(previous))) {
           stack.push(previous);
         }
+        if (!stack.length && state.screen !== 'role') {
+          // A signed-in user starts on the welcome/portal screen before the first in-app transition.
+          stack.push({
+            uid: signedInUser.uid, screen: 'role', role: accountRole || 'student',
+            pendingRole: null, classId: currentClassId, selectedClassId,
+            assignmentId: null, sessionCode: '', studentId: null, studentName: '',
+            submissionStatus: 'in-progress', slideIndex: 0, scrollY: 0, savedAt: Date.now()
+          });
+        }
         if (!stack.length) stack.push(state);
         if (getStepScreenKey(stack[stack.length - 1]) !== getStepScreenKey(state)) stack.push(state);
         else stack[stack.length - 1] = state;
