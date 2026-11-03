@@ -941,6 +941,7 @@
     let unsubStudentVectors = null;
     let localStudentStrokes = [];
     let studentVectorActiveStroke = null;
+    let studentVectorEraseGesture = null;
     let studentVectorSaveTimer = null;
     let studentVectorSaveInFlight = Promise.resolve();
     let studentVectorDirty = false;
@@ -1059,16 +1060,169 @@
           y: Number(Array.isArray(point) ? point[1] : point?.y) * height
         })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
         if (!points.length) return;
+        const breaks = new Set(Array.isArray(stroke.breaks) ? stroke.breaks : []);
         targetCtx.save();
         targetCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
         targetCtx.strokeStyle = stroke.color || '#1e293b';
         targetCtx.lineWidth = Math.max(1, Number(stroke.width || 0.004) * width);
         targetCtx.lineCap = 'round'; targetCtx.lineJoin = 'round';
-        targetCtx.beginPath(); targetCtx.moveTo(points[0].x, points[0].y);
+        targetCtx.beginPath();
+        points.forEach((point, index) => {
+          if (index === 0 || breaks.has(index)) targetCtx.moveTo(point.x, point.y);
+          else targetCtx.lineTo(point.x, point.y);
+        });
         if (points.length === 1) targetCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
-        else for (let i = 1; i < points.length; i++) targetCtx.lineTo(points[i].x, points[i].y);
         targetCtx.stroke(); targetCtx.restore();
       });
+    }
+
+    function studentPointToSegmentDistance(point, start, end) {
+      const dx = end.x - start.x, dy = end.y - start.y;
+      const lengthSquared = dx * dx + dy * dy;
+      if (!lengthSquared) return Math.hypot(point.x - start.x, point.y - start.y);
+      const t = Math.max(0, Math.min(1,
+        ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+      return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+    }
+
+    function studentPointToEraserDistance(point, eraserPoints) {
+      if (!eraserPoints.length) return Infinity;
+      if (eraserPoints.length === 1) return Math.hypot(point.x - eraserPoints[0].x, point.y - eraserPoints[0].y);
+      let distance = Infinity;
+      for (let i = 1; i < eraserPoints.length; i++) {
+        distance = Math.min(distance, studentPointToSegmentDistance(point, eraserPoints[i - 1], eraserPoints[i]));
+        if (distance === 0) break;
+      }
+      return distance;
+    }
+
+    function studentInterpolatePoint(a, b, t) {
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+
+    function clipStudentVectorSubpath(points, eraserPoints, eraserRadius) {
+      if (!points.length) return [];
+      const outside = point => studentPointToEraserDistance(point, eraserPoints) > eraserRadius;
+      if (points.length === 1) return outside(points[0]) ? [points] : [];
+
+      const fragments = [];
+      let fragment = outside(points[0]) ? [points[0]] : [];
+      for (let segmentIndex = 1; segmentIndex < points.length; segmentIndex++) {
+        const start = points[segmentIndex - 1], end = points[segmentIndex];
+        const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+        const steps = Math.max(1, Math.min(256,
+          Math.ceil(segmentLength / Math.max(eraserRadius * 0.5, 0.0005))));
+        let previousT = 0;
+        let previousOutside = outside(start);
+
+        for (let step = 1; step <= steps; step++) {
+          const t = step / steps;
+          const sample = studentInterpolatePoint(start, end, t);
+          const sampleOutside = outside(sample);
+          if (previousOutside !== sampleOutside) {
+            let low = previousT, high = t;
+            const lowIsOutside = previousOutside;
+            for (let iteration = 0; iteration < 12; iteration++) {
+              const middle = (low + high) / 2;
+              if (outside(studentInterpolatePoint(start, end, middle)) === lowIsOutside) low = middle;
+              else high = middle;
+            }
+            const boundary = studentInterpolatePoint(start, end, (low + high) / 2);
+            if (previousOutside) {
+              if (!fragment.length) fragment.push(studentInterpolatePoint(start, end, previousT));
+              fragment.push(boundary);
+              if (fragment.length) fragments.push(fragment);
+              fragment = [];
+            } else {
+              fragment = [boundary];
+            }
+          }
+          if (step === steps && sampleOutside) {
+            if (!fragment.length) fragment.push(sample);
+            else {
+              const last = fragment[fragment.length - 1];
+              if (Math.hypot(last.x - sample.x, last.y - sample.y) > 1e-9) fragment.push(sample);
+            }
+          }
+          previousT = t;
+          previousOutside = sampleOutside;
+        }
+      }
+      if (fragment.length) fragments.push(fragment);
+      return fragments.filter(part => part.length > 0);
+    }
+
+    function eraseStudentVectorStrokes(eraserPoints, eraserRadius) {
+      if (!eraserPoints.length || !localStudentStrokes.length) return false;
+      let changed = false;
+      const nextStrokes = [];
+
+      localStudentStrokes.forEach(stroke => {
+        if (stroke.type === 'text') {
+          const text = String(stroke.text || '');
+          const fontSize = Number(stroke.width || 0.004) * mainCanvas.width * 4
+            + 12 * (mainCanvas.width / 1000);
+          const left = Number(stroke.x || 0);
+          const top = Number(stroke.y || 0) - fontSize / mainCanvas.height;
+          const right = left + (text.length * fontSize * 0.55 / mainCanvas.width);
+          const bottom = Number(stroke.y || 0) + eraserRadius;
+          const hit = eraserPoints.some(point =>
+            point.x >= left - eraserRadius && point.x <= right + eraserRadius
+            && point.y >= top - eraserRadius && point.y <= bottom + eraserRadius);
+          if (hit) changed = true;
+          else nextStrokes.push(stroke);
+          return;
+        }
+
+        // Older documents may contain destination-out eraser operations. Keep their
+        // order and semantics; new erasing is destructive geometry clipping instead.
+        if (stroke.tool === 'eraser' || !Array.isArray(stroke.points) || !stroke.points.length) {
+          nextStrokes.push(stroke);
+          return;
+        }
+
+        const originalPoints = stroke.points.map(point => ({
+          x: Number(Array.isArray(point) ? point[0] : point?.x),
+          y: Number(Array.isArray(point) ? point[1] : point?.y)
+        })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+        if (!originalPoints.length) { nextStrokes.push(stroke); return; }
+
+        const breakIndexes = new Set(Array.isArray(stroke.breaks) ? stroke.breaks : []);
+        const sourceParts = [];
+        let part = [];
+        originalPoints.forEach((point, index) => {
+          if (index > 0 && breakIndexes.has(index)) {
+            if (part.length) sourceParts.push(part);
+            part = [];
+          }
+          part.push(point);
+        });
+        if (part.length) sourceParts.push(part);
+
+        const strokeRadius = eraserRadius + Math.max(0, Number(stroke.width || 0.004)) / 2;
+        const clippedParts = sourceParts.flatMap(sourcePart =>
+          clipStudentVectorSubpath(sourcePart, eraserPoints, strokeRadius));
+        const flattened = [];
+        const breaks = [];
+        clippedParts.forEach((clippedPart, index) => {
+          if (index > 0) breaks.push(flattened.length);
+          flattened.push(...clippedPart);
+        });
+
+        const sameGeometry = flattened.length === originalPoints.length
+          && flattened.every((point, index) =>
+            Math.abs(point.x - originalPoints[index].x) < 1e-8
+            && Math.abs(point.y - originalPoints[index].y) < 1e-8);
+        if (!sameGeometry) changed = true;
+        if (flattened.length) nextStrokes.push({
+          ...stroke,
+          points: flattened,
+          ...(breaks.length ? { breaks } : { breaks: [] })
+        });
+      });
+
+      if (changed) localStudentStrokes = nextStrokes;
+      return changed;
     }
 
     function renderStudentVectorLayer() {
@@ -1083,7 +1237,7 @@
       if (unsubStudentVectors) { unsubStudentVectors(); unsubStudentVectors = null; }
       if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
       studentVectorDirty = false; studentVectorLoading = false; studentVectorLoadFailed = false;
-      localStudentStrokes = []; studentVectorActiveStroke = null; studentVectorLoadKey = '';
+      localStudentStrokes = []; studentVectorActiveStroke = null; studentVectorEraseGesture = null; studentVectorLoadKey = '';
       if (studentVectorCtx && studentVectorCanvas) studentVectorCtx.clearRect(0, 0, studentVectorCanvas.width, studentVectorCanvas.height);
     }
 
@@ -1179,35 +1333,46 @@
           color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
         renderStudentVectorLayer(); scheduleStudentVectorSave(false); return;
       }
-      if (localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
-        showToast('This slide has reached its handwriting limit.', 'error'); return;
-      }
+
       beginCanvasAction();
-      studentVectorActiveStroke = { type: 'path', coordinateSpace: 'normalized-v1', tool: activeTool,
-        color: currentColor,
-        width: (activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth)) / (canvasZoom * mainCanvas.width),
-        points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }] };
-      localStudentStrokes.push(studentVectorActiveStroke);
       isDrawing = true;
       lastX = p.x; lastY = p.y;
       studentVectorCanvas.setPointerCapture(e.pointerId);
+
+      if (activeTool === 'eraser') {
+        const eraserWidth = (Number(currentLineWidth) * 4) / (canvasZoom * mainCanvas.width);
+        studentVectorEraseGesture = {
+          radius: eraserWidth / 2,
+          points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }]
+        };
+        return;
+      }
+
+      if (localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+        isDrawing = false;
+        try { studentVectorCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        showToast('This slide has reached its handwriting limit.', 'error'); return;
+      }
+      studentVectorActiveStroke = { type: 'path', coordinateSpace: 'normalized-v1', tool: 'pen',
+        color: currentColor,
+        width: Number(currentLineWidth) / (canvasZoom * mainCanvas.width),
+        points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }] };
+      localStudentStrokes.push(studentVectorActiveStroke);
       renderStudentVectorLayer();
       scheduleStudentVectorSave(false);
     }
 
     function handleStudentVectorPointerMove(e) {
-      if (!studentVectorActiveStroke || !isStudentVectorEditingContext()) return;
+      if ((!studentVectorActiveStroke && !studentVectorEraseGesture) || !isStudentVectorEditingContext()) return;
       if (isStylusOnlyMode && e.pointerType === 'touch') return;
       e.preventDefault();
       const rect = canvasWrapper.getBoundingClientRect();
       const samples = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
       (samples.length ? samples : [e]).forEach(sample => {
         const p = getCanvasCoordinates(sample, rect);
-        const totalPoints = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
-        if (totalPoints < STUDENT_VECTOR_MAX_POINTS) {
-          studentVectorActiveStroke.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
-        }
-        if (studentVectorActiveStroke.tool === 'eraser') {
+        if (studentVectorEraseGesture) {
+          studentVectorEraseGesture.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
+          // Keep the existing raster eraser behaviour for photos and flattened marks.
           ctx.save();
           ctx.globalCompositeOperation = 'source-over';
           ctx.strokeStyle = '#ffffff';
@@ -1215,22 +1380,40 @@
           ctx.lineCap = 'round'; ctx.lineJoin = 'round';
           ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(p.x, p.y); ctx.stroke();
           ctx.restore();
+          saveCanvasToFirestore();
+        } else {
+          const totalPoints = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
+          if (totalPoints < STUDENT_VECTOR_MAX_POINTS) {
+            studentVectorActiveStroke.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
+          }
         }
         lastX = p.x; lastY = p.y;
       });
-      renderStudentVectorLayer();
-      if (studentVectorActiveStroke.tool === 'eraser') saveCanvasToFirestore();
-      scheduleStudentVectorSave(false);
+      if (studentVectorActiveStroke) {
+        renderStudentVectorLayer();
+        scheduleStudentVectorSave(false);
+      }
     }
 
     function handleStudentVectorPointerUp(e) {
-      if (!studentVectorActiveStroke) return;
-      const wasRasterEraser = studentVectorActiveStroke.tool === 'eraser';
+      if (!studentVectorActiveStroke && !studentVectorEraseGesture) return;
+      const erasedVector = Boolean(studentVectorEraseGesture);
+      const eraseGesture = studentVectorEraseGesture;
+      studentVectorEraseGesture = null;
       studentVectorActiveStroke = null;
       isDrawing = false;
       try { studentVectorCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
-      if (wasRasterEraser) saveCanvasToFirestore();
-      renderStudentVectorLayer(); scheduleStudentVectorSave(false);
+      if (erasedVector) {
+        const changed = eraseStudentVectorStrokes(eraseGesture.points, eraseGesture.radius);
+        if (changed) {
+          renderStudentVectorLayer();
+          scheduleStudentVectorSave(false);
+        }
+        saveCanvasToFirestore();
+        return;
+      }
+      renderStudentVectorLayer();
+      scheduleStudentVectorSave(false);
     }
 
     function annotationAuthorId() {
