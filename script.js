@@ -948,7 +948,7 @@
     let studentVectorLoadFailed = false;
     let studentVectorLastWriteAt = 0;
     let studentVectorLoadKey = '';
-    let studentVectorPreviewMarkerKey = '';
+    let studentVectorMarkerKey = '';
     const STUDENT_VECTOR_WRITE_MS = 2000;
     const STUDENT_VECTOR_MAX_STROKES = 300;
     const STUDENT_VECTOR_MAX_POINTS = 10000;
@@ -1126,10 +1126,10 @@
       studentVectorSaveInFlight = studentVectorSaveInFlight.catch(() => {}).then(async () => {
         // Create the slide parent once so preview listeners and deletion routines can
         // discover vector-only slides. Flush pending photo/raster work first.
-        if (studentVectorPreviewMarkerKey !== markerKey) {
+        if (studentVectorMarkerKey !== markerKey) {
           await flushCanvasSaveToFirestore();
           await slideRef.set({ studentDrawingFormat: 'normalized-v1' }, { merge: true });
-          studentVectorPreviewMarkerKey = markerKey;
+          studentVectorMarkerKey = markerKey;
         }
         await ref.set(payload, { merge: true });
       });
