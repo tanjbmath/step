@@ -948,7 +948,8 @@
     let studentVectorLoadFailed = false;
     let studentVectorLastWriteAt = 0;
     let studentVectorLoadKey = '';
-    const STUDENT_VECTOR_WRITE_MS = 750;
+    let studentVectorPreviewMarkerKey = '';
+    const STUDENT_VECTOR_WRITE_MS = 2000;
     const STUDENT_VECTOR_MAX_STROKES = 300;
     const STUDENT_VECTOR_MAX_POINTS = 18000;
     let unsubAnnotations = null;
@@ -1117,7 +1118,17 @@
       const ref = studentVectorSlideRef(signedInUser.uid).collection('studentDrawings').doc('student');
       const payload = { ownerUid: signedInUser.uid, format: 'normalized-v1',
         strokes: localStudentStrokes.slice(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
-      studentVectorSaveInFlight = studentVectorSaveInFlight.catch(() => {}).then(() => ref.set(payload, { merge: true }));
+      const markerKey = currentAssignmentId + ':' + signedInUser.uid;
+      studentVectorSaveInFlight = studentVectorSaveInFlight.catch(() => {}).then(async () => {
+        // Mark slide 0 on the student roster once per session so the teacher dashboard
+        // subscribes to vector previews only for students who actually have them.
+        if (currentSlideIndex === 0 && studentVectorPreviewMarkerKey !== markerKey) {
+          await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
+            .set({ studentVectorSlide0: true }, { merge: true });
+          studentVectorPreviewMarkerKey = markerKey;
+        }
+        await ref.set(payload, { merge: true });
+      });
       return studentVectorSaveInFlight;
     }
 
@@ -2592,7 +2603,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const cachedPreviewSource = studentPreviewData.get(key);
         if (img && cachedPreviewSource && img.getAttribute('src') !== cachedPreviewSource) img.src = cachedPreviewSource;
         ensureStudentVectorPreviewCanvas(studentUid, key);
-        if (!studentPreviewVectorUnsubscribers.has(key)) {
+        if (student.studentVectorSlide0 === true && !studentPreviewVectorUnsubscribers.has(key)) {
           const vectorUnsubscribe = db.collection('assignments').doc(currentAssignmentId)
             .collection('students').doc(studentUid).collection('slides').doc('slide_0')
             .collection('studentDrawings').doc('student')
