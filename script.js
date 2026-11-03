@@ -1366,10 +1366,16 @@
         activeClassBadge.textContent = 'Class: ' + getClassDisplayName(currentClassId);
         activeClassBadge.classList.remove('hidden');
       }
+      // A role/dashboard transition must never leave the canvas workspace visible.
+      // The workspace is a separate screen and must be hidden before either dashboard
+      // or student history/join UI is shown.
+      workspaceScreen.classList.add('hidden');
+      teacherDashboard.classList.add('hidden');
+      studentJoinScreen.classList.add('hidden');
+      studentHistoryScreen.classList.add('hidden');
       document.getElementById('classSelectionScreen').classList.add('hidden');
       roleSelectionScreen.classList.add('hidden');
       saveStepScreenState();
-      studentHistoryScreen.classList.add('hidden');
       resetRoleBtn.classList.remove('hidden');
 
       if (role === 'teacher') {
