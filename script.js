@@ -983,7 +983,12 @@
       annotationCanvas.style.transform = mainCanvas.style.transform;
       mainCanvas.style.pointerEvents = isVectorAnnotationContext() ? 'none' : mainCanvas.style.pointerEvents;
     }
-    function annotationAuthorId() { return signedInUser?.uid || ''; }
+    function annotationAuthorId() {
+      // Teacher and peer-helper marks share one editable staff layer.
+      // A teacher can therefore correct or erase a peer helper's annotation.
+      return (currentUserRole === 'teacher' || activeHelpMode === 'helper' || activeHelpMode === 'teacher')
+        ? 'staff' : (signedInUser?.uid || '');
+    }
     function annotationSlideRef() {
       return db.collection('assignments').doc(currentAssignmentId)
         .collection('students').doc(inspectingStudentId || studentId)
