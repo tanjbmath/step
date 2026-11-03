@@ -1152,7 +1152,8 @@
       if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
       if (!studentVectorDirty) return studentVectorSaveInFlight;
       studentVectorDirty = false;
-      const task = studentVectorSaveInFlight.catch(() => {}).then(() => persistStudentVectorDrawings());
+      const task = studentVectorSaveInFlight.catch(() => {}).then(() => persistStudentVectorDrawings())
+        .catch(err => { studentVectorDirty = true; throw err; });
       studentVectorSaveInFlight = task; await task; return task;
     }
 
