@@ -1073,6 +1073,8 @@
 
     function renderStudentVectorLayer() {
       if (!studentVectorCtx || !studentVectorCanvas) return;
+      studentVectorCanvas.style.display =
+        (isStudentVectorEditingContext() || inspectingStudentId || localStudentStrokes.length) ? 'block' : 'none';
       drawStudentStrokesToContext(studentVectorCtx, localStudentStrokes,
         studentVectorCanvas.width, studentVectorCanvas.height);
     }
@@ -4758,6 +4760,10 @@ async function loadAssignmentProgressCounts(assignment) {
     async function createPeerHelpRequest(question) {
       if (!signedInUser || !currentAssignmentId || currentSubmissionStatus !== 'in-progress' || requesterHelpLock) {
         showToast('You can request help while actively working on an assignment.', 'info');
+        return;
+      }
+      if (!canvasLoadReady) {
+        showToast('Wait until the saved canvas and handwriting finish loading before requesting help.', 'info');
         return;
       }
       const button = document.getElementById('createPeerHelpBtn');
