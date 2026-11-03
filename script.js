@@ -1358,15 +1358,8 @@
       e.preventDefault();
       const p = getCanvasCoordinates(e);
       if (activeTool === 'text') {
-        const text = prompt('Enter text overlay:'); if (!text) return;
-        if (text.length > 500 || localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
-          showToast('This slide has reached its handwriting limit.', 'error'); return;
-        }
-        beginCanvasAction();
-        localStudentStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
-          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
-          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
-        renderStudentVectorLayer(); scheduleStudentVectorSave(false); return;
+        openTextOverlayDialog('student-vector', p.x, p.y);
+        return;
       }
 
       if (activeTool !== 'eraser' && localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
@@ -1600,13 +1593,8 @@
       e.preventDefault();
       const p = getCanvasCoordinates(e);
       if (activeTool === 'text') {
-        const text = prompt('Enter annotation text:');
-        if (!text) return;
-        copyAnnotationSnapshot();
-        localAnnotationStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
-          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
-          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
-        renderAnnotationLayers(); scheduleVectorAnnotationSave(true); return;
+        openTextOverlayDialog('annotation', p.x, p.y);
+        return;
       }
       copyAnnotationSnapshot();
       annotationActiveStroke = {
@@ -4123,6 +4111,101 @@ async function loadAssignmentProgressCounts(assignment) {
       }
     }
 
+    // Mobile-safe text entry: never use the browser's blocking prompt() from a
+    // canvas pointer event. Keep the tapped canvas position while the dialog is open.
+    const textOverlayModal = document.getElementById('textOverlayModal');
+    const textOverlayInput = document.getElementById('textOverlayInput');
+    const textOverlayForm = document.getElementById('textOverlayForm');
+    const textOverlayCancelBtn = document.getElementById('textOverlayCancelBtn');
+    let pendingTextOverlay = null;
+
+    function closeTextOverlayDialog() {
+      pendingTextOverlay = null;
+      textOverlayInput.value = '';
+      textOverlayModal.classList.add('hidden');
+      setTool('pen');
+    }
+
+    function openTextOverlayDialog(mode, x, y) {
+      if (!textOverlayModal || pendingTextOverlay) return;
+      pendingTextOverlay = { mode, x, y };
+      textOverlayInput.value = '';
+      textOverlayModal.classList.remove('hidden');
+      // Focus after the dialog is visible so mobile browsers open the keyboard
+      // against the actual in-page input rather than a native browser prompt.
+      requestAnimationFrame(() => {
+        if (pendingTextOverlay) {
+          textOverlayInput.focus();
+          textOverlayInput.setSelectionRange(0, textOverlayInput.value.length);
+        }
+      });
+    }
+
+    textOverlayForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!pendingTextOverlay) return;
+      const text = textOverlayInput.value.trim();
+      const target = pendingTextOverlay;
+      if (!text) {
+        closeTextOverlayDialog();
+        return;
+      }
+      if (text.length > 500) {
+        showToast('Text overlay must be 500 characters or fewer.', 'error');
+        textOverlayInput.focus();
+        return;
+      }
+
+      if (target.mode === 'student-vector') {
+        if (!isStudentVectorEditingContext() || localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+          showToast('This slide has reached its handwriting limit or is no longer editable.', 'error');
+          closeTextOverlayDialog();
+          return;
+        }
+        beginCanvasAction();
+        localStudentStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
+          x: target.x / mainCanvas.width, y: target.y / mainCanvas.height,
+          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
+        renderStudentVectorLayer();
+        scheduleStudentVectorSave(false);
+      } else if (target.mode === 'annotation') {
+        if (!canDrawVectorAnnotations()) {
+          showToast('Annotations are no longer editable in this view.', 'error');
+          closeTextOverlayDialog();
+          return;
+        }
+        copyAnnotationSnapshot();
+        localAnnotationStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
+          x: target.x / mainCanvas.width, y: target.y / mainCanvas.height,
+          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
+        renderAnnotationLayers();
+        scheduleVectorAnnotationSave(true);
+      } else {
+        if (!canvasLoadReady) {
+          showToast('Please wait for the saved canvas to finish loading.', 'info');
+          closeTextOverlayDialog();
+          return;
+        }
+        beginCanvasAction();
+        ctx.font = `${currentLineWidth * 4 + 12}px Inter, sans-serif`;
+        ctx.fillStyle = currentColor;
+        ctx.fillText(text, target.x, target.y);
+        saveCanvasToFirestore();
+      }
+      closeTextOverlayDialog();
+    });
+
+    textOverlayCancelBtn.addEventListener('click', closeTextOverlayDialog);
+    textOverlayModal.addEventListener('click', event => {
+      if (event.target === textOverlayModal) closeTextOverlayDialog();
+    });
+    textOverlayInput.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeTextOverlayDialog();
+      }
+    });
+
     const capturePhotoBtn = document.getElementById('capturePhotoBtn');
     const capturePhotoInput = document.getElementById('capturePhotoInput');
     const chooseImageBtn = document.getElementById('chooseImageBtn');
@@ -4409,14 +4492,7 @@ async function loadAssignmentProgressCounts(assignment) {
       const coords = getCanvasCoordinates(e);
 
       if (activeTool === 'text') {
-        const text = prompt("Enter text overlay:");
-        if (text) {
-          beginCanvasAction();
-          ctx.font = `${currentLineWidth * 4 + 12}px Inter, sans-serif`;
-          ctx.fillStyle = currentColor;
-          ctx.fillText(text, coords.x, coords.y);
-          saveCanvasToFirestore();
-        }
+        openTextOverlayDialog('raster', coords.x, coords.y);
         return;
       }
 
