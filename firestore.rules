@@ -638,6 +638,7 @@ service cloud.firestore {
               let studentPath = /databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid);
               return isOwner(studentUid)
                 && isAssignmentMember(assignmentId, studentUid)
+                && get(studentPath).data.status in ['in-progress', 'assignment-started']
                 && (
                   !('activeHelpLockKey' in get(studentPath).data)
                   || get(helpLockPath(assignmentId, get(studentPath).data.activeHelpLockKey)).data.status != 'helping'
