@@ -656,7 +656,21 @@ service cloud.firestore {
               && request.resource.data.strokes is list
               && request.resource.data.strokes.size() <= 300;
 
-            allow delete: if drawingId == 'student' && studentCanEditVector();
+            function studentCanDeleteVector() {
+              let studentPath = /databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid);
+              let assignmentPath = /databases/$(database)/documents/assignments/$(assignmentId);
+              return ownsAssignment(assignmentId) || (
+                isOwner(studentUid)
+                && (
+                  !exists(assignmentPath)
+                  || !exists(studentPath)
+                  || !('activeHelpLockKey' in get(studentPath).data)
+                  || get(helpLockPath(assignmentId, get(studentPath).data.activeHelpLockKey)).data.status in ['submitted', 'acknowledged', 'expired', 'cancelled']
+                )
+              );
+            }
+
+            allow delete: if drawingId == 'student' && studentCanDeleteVector();
           }
 
           match /annotations/{authorUid} {
