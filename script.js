@@ -3189,7 +3189,7 @@ async function loadAssignmentProgressCounts(assignment) {
 
       // Helpers must work on the requester's submitted canvas, not their own completed work.
       if (db && activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode)
-          && (!inspectingStudentId || activeHelpMode === 'helper')) {
+          && !inspectingStudentId) {
         const requestId = activeHelpRequestId;
         unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('helpRequests').doc(requestId)
