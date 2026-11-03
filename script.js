@@ -1225,6 +1225,35 @@
       return changed;
     }
 
+    function compactLegacyStudentVectorErasers(strokes) {
+      let working = [];
+      let changed = false;
+      (strokes || []).forEach(stroke => {
+        if (stroke?.tool === 'eraser' && Array.isArray(stroke.points)) {
+          const points = stroke.points.map(point => ({
+            x: Number(Array.isArray(point) ? point[0] : point?.x),
+            y: Number(Array.isArray(point) ? point[1] : point?.y)
+          })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+          if (points.length) {
+            const previous = localStudentStrokes;
+            localStudentStrokes = working;
+            const erased = eraseStudentVectorStrokes(points, Math.max(0, Number(stroke.width || 0)) / 2);
+            working = localStudentStrokes;
+            localStudentStrokes = previous;
+            changed = changed || erased;
+          } else {
+            changed = true;
+          }
+        } else {
+          working.push(stroke);
+        }
+      });
+      // Every legacy eraser operation is removed after being applied to the paths
+      // that preceded it, preserving the original draw/erase ordering.
+      if ((strokes || []).some(stroke => stroke?.tool === 'eraser')) changed = true;
+      return { strokes: working, changed };
+    }
+
     function renderStudentVectorLayer() {
       if (!studentVectorCtx || !studentVectorCanvas) return;
       studentVectorCanvas.style.display =
@@ -1253,10 +1282,15 @@
         .onSnapshot(doc => {
           if (studentVectorActiveStroke || studentVectorDirty) return;
           const data = doc.exists ? (doc.data() || {}) : {};
-          localStudentStrokes = Array.isArray(data.strokes) ? data.strokes : [];
+          const savedStrokes = Array.isArray(data.strokes) ? data.strokes : [];
+          const compacted = compactLegacyStudentVectorErasers(savedStrokes);
+          localStudentStrokes = compacted.strokes;
           studentVectorLoading = false; studentVectorLoadFailed = false;
           renderStudentVectorLayer();
           setCanvasLoadReady(canvasBaseLoadReady);
+          // Migrate old white/eraser vector operations into clipped paths on the
+          // student's next editable load. Read-only teacher previews never write.
+          if (compacted.changed && isStudentVectorEditingContext()) scheduleStudentVectorSave(true);
         }, err => {
           studentVectorLoading = false; studentVectorLoadFailed = true;
           console.warn('Student vector listener failed:', err);
@@ -1334,6 +1368,9 @@
         renderStudentVectorLayer(); scheduleStudentVectorSave(false); return;
       }
 
+      if (activeTool !== 'eraser' && localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
+        showToast('This slide has reached its handwriting limit.', 'error'); return;
+      }
       beginCanvasAction();
       isDrawing = true;
       lastX = p.x; lastY = p.y;
@@ -1348,11 +1385,6 @@
         return;
       }
 
-      if (localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
-        isDrawing = false;
-        try { studentVectorCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
-        showToast('This slide has reached its handwriting limit.', 'error'); return;
-      }
       studentVectorActiveStroke = { type: 'path', coordinateSpace: 'normalized-v1', tool: 'pen',
         color: currentColor,
         width: Number(currentLineWidth) / (canvasZoom * mainCanvas.width),
