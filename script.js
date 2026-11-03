@@ -1012,11 +1012,17 @@
         layer.width = annotationCanvas.width; layer.height = annotationCanvas.height;
         const layerCtx = layer.getContext('2d');
         (strokes || []).forEach(stroke => {
+          const normalized = stroke.coordinateSpace === 'normalized-v1';
+          const scaleX = normalized ? annotationCanvas.width : 1;
+          const scaleY = normalized ? annotationCanvas.height : 1;
+          const scaleSize = normalized ? annotationCanvas.width : 1;
           if (stroke.type === 'text') {
             layerCtx.globalCompositeOperation = 'source-over';
-            layerCtx.font = (Number(stroke.width || 4) * 4 + 12) + 'px Inter, sans-serif';
+            const textWidth = Number(stroke.width || 4) * (normalized ? scaleSize : 1);
+            const textScale = normalized ? scaleSize / 1000 : 1;
+            layerCtx.font = (textWidth * 4 + 12 * textScale) + 'px Inter, sans-serif';
             layerCtx.fillStyle = stroke.color || '#dc2626';
-            layerCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0), Number(stroke.y || 0));
+            layerCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0) * scaleX, Number(stroke.y || 0) * scaleY);
             return;
           }
           // Firestore-compatible vector points are plain objects, not nested arrays.
@@ -1024,13 +1030,13 @@
           const points = Array.isArray(stroke.points) ? stroke.points.map(point => {
             const x = Number(Array.isArray(point) ? point[0] : point?.x);
             const y = Number(Array.isArray(point) ? point[1] : point?.y);
-            return { x, y };
+            return { x: x * scaleX, y: y * scaleY };
           }).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
           if (!points.length) return;
           layerCtx.save();
           layerCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
           layerCtx.strokeStyle = stroke.color || '#dc2626';
-          layerCtx.lineWidth = Math.max(1, Number(stroke.width || 4));
+          layerCtx.lineWidth = Math.max(1, Number(stroke.width || 4) * scaleSize);
           layerCtx.lineCap = 'round'; layerCtx.lineJoin = 'round';
           layerCtx.beginPath(); layerCtx.moveTo(points[0].x, points[0].y);
           if (points.length === 1) {
@@ -1122,14 +1128,16 @@
         const text = prompt('Enter annotation text:');
         if (!text) return;
         copyAnnotationSnapshot();
-        localAnnotationStrokes.push({ type: 'text', text, x: p.x, y: p.y, color: currentColor, width: currentLineWidth });
+        localAnnotationStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
+          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
+          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
         renderAnnotationLayers(); scheduleVectorAnnotationSave(true); return;
       }
       copyAnnotationSnapshot();
       annotationActiveStroke = {
-        type: 'path', tool: activeTool, color: currentColor,
-        width: activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth),
-        points: [{ x: p.x, y: p.y }]
+        type: 'path', coordinateSpace: 'normalized-v1', tool: activeTool, color: currentColor,
+        width: (activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth)) / mainCanvas.width,
+        points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }]
       };
       localAnnotationStrokes.push(annotationActiveStroke);
       annotationCanvas.setPointerCapture(e.pointerId);
@@ -1143,7 +1151,9 @@
       (samples.length ? samples : [e]).forEach(sample => {
         const p = getCanvasCoordinates(sample);
         const pts = annotationActiveStroke.points;
-        if (pts.length < ANNOTATION_MAX_POINTS) pts.push({ x: p.x, y: p.y });
+        if (pts.length < ANNOTATION_MAX_POINTS) pts.push({
+          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height
+        });
       });
       renderAnnotationLayers(); scheduleVectorAnnotationSave(false);
     }
@@ -3217,11 +3227,10 @@ async function loadAssignmentProgressCounts(assignment) {
       }
 
       const targetStudentId = inspectingStudentId || studentId;
-      // Avoid an annotation listener for ordinary in-progress student work; subscribe only
-      // when viewing submitted work or an explicit teacher/peer review target.
-      if (targetStudentId && (inspectingStudentId || currentSubmissionStatus !== 'in-progress' || activeHelpRequestId)) {
-        startAnnotationListener(targetStudentId);
-      }
+      // Every student workspace subscribes to its own annotation collection,
+      // including in-progress work, so teacher feedback appears immediately.
+      // Firestore rules restrict student reads to their own work.
+      if (targetStudentId) startAnnotationListener(targetStudentId);
       if (!targetStudentId) {
         setCanvasLoadReady(true);
         return;
