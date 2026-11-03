@@ -1059,6 +1059,7 @@
     }
     function scheduleVectorAnnotationSave(force = false) {
       if (!canDrawVectorAnnotations()) return;
+      if (annotationSaveTimer && !force) return;
       if (annotationSaveTimer) clearTimeout(annotationSaveTimer);
       const elapsed = Date.now() - annotationLastWriteAt;
       const delay = force ? 0 : Math.max(0, ANNOTATION_LIVE_WRITE_MS - elapsed);
@@ -3068,7 +3069,8 @@ async function loadAssignmentProgressCounts(assignment) {
       canvasLoadReady = Boolean(ready);
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
         && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
-      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked) ? 'auto' : 'none';
+      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked && !isVectorAnnotationContext()) ? 'auto' : 'none';
+      if (annotationCanvas) annotationCanvas.style.pointerEvents = (canvasLoadReady && canDrawVectorAnnotations()) ? 'auto' : 'none';
       const helperSubmit = document.getElementById('submitPeerHelpBtn');
       const teacherSubmit = document.getElementById('teacherSubmitPeerHelpBtn');
       if (helperSubmit) helperSubmit.disabled = !canvasLoadReady;
@@ -3879,7 +3881,7 @@ async function loadAssignmentProgressCounts(assignment) {
       ['toolPen', 'toolEraser', 'toolText', 'colorPicker', 'brushSize', 'clearCanvasBtn', 'capturePhotoBtn', 'chooseImageBtn', 'undoCanvasBtn', 'redoCanvasBtn', 'prevSlideBtn', 'nextSlideBtn'].forEach(id => {
         const control = document.getElementById(id);
         if (control) {
-          control.disabled = requesterIsLocked || (restrictedHelpMode && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
+          control.disabled = requesterIsLocked || (isVectorAnnotationContext() && ['capturePhotoBtn', 'chooseImageBtn'].includes(id)) || (restrictedHelpMode && !['toolPen', 'brushSize', 'undoCanvasBtn', 'redoCanvasBtn'].includes(id));
         }
       });
       // Peer helpers use a fixed rose-colour pen. Teachers inspecting student work
