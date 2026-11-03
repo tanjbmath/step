@@ -934,6 +934,19 @@
     // transparent canvas and in one Firestore document per annotator and slide.
     let annotationCanvas = null;
     let annotationCtx = null;
+    let studentVectorCanvas = null;
+    let studentVectorCtx = null;
+    let unsubStudentVectors = null;
+    let localStudentStrokes = [];
+    let studentVectorActiveStroke = null;
+    let studentVectorSaveTimer = null;
+    let studentVectorSaveInFlight = Promise.resolve();
+    let studentVectorDirty = false;
+    let studentVectorLastWriteAt = 0;
+    let studentVectorLoadKey = '';
+    const STUDENT_VECTOR_WRITE_MS = 450;
+    const STUDENT_VECTOR_MAX_STROKES = 300;
+    const STUDENT_VECTOR_MAX_POINTS = 18000;
     let unsubAnnotations = null;
     let annotationRecords = new Map();
     let localAnnotationStrokes = [];
@@ -981,8 +994,187 @@
       annotationCanvas.style.pointerEvents = writable ? 'auto' : 'none';
       annotationCanvas.style.display = (inspectingStudentId || annotationRecords.size) ? 'block' : 'none';
       annotationCanvas.style.transform = mainCanvas.style.transform;
-      mainCanvas.style.pointerEvents = isVectorAnnotationContext() ? 'none' : mainCanvas.style.pointerEvents;
+      annotationCanvas.style.zIndex = '3';
+      mainCanvas.style.pointerEvents = (isVectorAnnotationContext() || isStudentVectorEditingContext()) ? 'none' : mainCanvas.style.pointerEvents;
     }
+    function isStudentVectorEditingContext() {
+      return Boolean(currentUserRole === 'student' && !inspectingStudentId
+        && currentSubmissionStatus === 'in-progress'
+        && !['helper', 'teacher'].includes(activeHelpMode)
+        && signedInUser && studentId === signedInUser.uid && currentAssignmentId);
+    }
+
+    function studentVectorSlideRef(targetUid = inspectingStudentId || studentId) {
+      return db.collection('assignments').doc(currentAssignmentId)
+        .collection('students').doc(targetUid)
+        .collection('slides').doc('slide_' + currentSlideIndex);
+    }
+
+    function ensureStudentVectorCanvas() {
+      if (!studentVectorCanvas) {
+        studentVectorCanvas = document.createElement('canvas');
+        studentVectorCanvas.id = 'studentVectorCanvas';
+        studentVectorCanvas.setAttribute('aria-label', 'Student vector handwriting');
+        Object.assign(studentVectorCanvas.style, {
+          position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
+          zIndex: '2', touchAction: 'none', pointerEvents: 'none', transformOrigin: '0 0'
+        });
+        canvasWrapper.appendChild(studentVectorCanvas);
+        studentVectorCtx = studentVectorCanvas.getContext('2d');
+        studentVectorCanvas.addEventListener('pointerdown', handleStudentVectorPointerDown);
+        studentVectorCanvas.addEventListener('pointermove', handleStudentVectorPointerMove);
+        studentVectorCanvas.addEventListener('pointerup', handleStudentVectorPointerUp);
+        studentVectorCanvas.addEventListener('pointercancel', handleStudentVectorPointerUp);
+      }
+      if (studentVectorCanvas.width !== mainCanvas.width || studentVectorCanvas.height !== mainCanvas.height) {
+        studentVectorCanvas.width = mainCanvas.width;
+        studentVectorCanvas.height = mainCanvas.height;
+      }
+      studentVectorCanvas.style.transform = mainCanvas.style.transform;
+      studentVectorCanvas.style.pointerEvents = canvasLoadReady && isStudentVectorEditingContext() ? 'auto' : 'none';
+      studentVectorCanvas.style.display = (isStudentVectorEditingContext() || inspectingStudentId || localStudentStrokes.length) ? 'block' : 'none';
+      if (isStudentVectorEditingContext() || isVectorAnnotationContext()) mainCanvas.style.pointerEvents = 'none';
+      renderStudentVectorLayer();
+    }
+
+    function renderStudentVectorLayer() {
+      if (!studentVectorCtx || !studentVectorCanvas) return;
+      const width = studentVectorCanvas.width, height = studentVectorCanvas.height;
+      studentVectorCtx.clearRect(0, 0, width, height);
+      (localStudentStrokes || []).forEach(stroke => {
+        if (stroke.type === 'text') {
+          const scale = width;
+          const textScale = scale / 1000;
+          studentVectorCtx.globalCompositeOperation = 'source-over';
+          studentVectorCtx.font = (Number(stroke.width || 0.004) * scale * 4 + 12 * textScale) + 'px Inter, sans-serif';
+          studentVectorCtx.fillStyle = stroke.color || '#1e293b';
+          studentVectorCtx.fillText(String(stroke.text || ''), Number(stroke.x || 0) * width, Number(stroke.y || 0) * height);
+          return;
+        }
+        const points = Array.isArray(stroke.points) ? stroke.points.map(point => ({
+          x: Number(Array.isArray(point) ? point[0] : point?.x) * width,
+          y: Number(Array.isArray(point) ? point[1] : point?.y) * height
+        })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
+        if (!points.length) return;
+        studentVectorCtx.save();
+        studentVectorCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+        studentVectorCtx.strokeStyle = stroke.color || '#1e293b';
+        studentVectorCtx.lineWidth = Math.max(1, Number(stroke.width || 0.004) * width);
+        studentVectorCtx.lineCap = 'round'; studentVectorCtx.lineJoin = 'round';
+        studentVectorCtx.beginPath(); studentVectorCtx.moveTo(points[0].x, points[0].y);
+        if (points.length === 1) studentVectorCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
+        else for (let i = 1; i < points.length; i++) studentVectorCtx.lineTo(points[i].x, points[i].y);
+        studentVectorCtx.stroke(); studentVectorCtx.restore();
+      });
+    }
+
+    function stopStudentVectorListener() {
+      if (unsubStudentVectors) { unsubStudentVectors(); unsubStudentVectors = null; }
+      if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
+      studentVectorDirty = false; localStudentStrokes = []; studentVectorActiveStroke = null; studentVectorLoadKey = '';
+      if (studentVectorCtx && studentVectorCanvas) studentVectorCtx.clearRect(0, 0, studentVectorCanvas.width, studentVectorCanvas.height);
+    }
+
+    function startStudentVectorListener(targetUid) {
+      if (!db || !currentAssignmentId || !targetUid) return;
+      const key = [currentAssignmentId, targetUid, currentSlideIndex].join(':');
+      if (studentVectorLoadKey === key) return;
+      stopStudentVectorListener(); studentVectorLoadKey = key;
+      ensureStudentVectorCanvas();
+      unsubStudentVectors = studentVectorSlideRef(targetUid).collection('studentDrawings').doc('student')
+        .onSnapshot(doc => {
+          if (studentVectorActiveStroke || studentVectorDirty) return;
+          const data = doc.exists ? (doc.data() || {}) : {};
+          localStudentStrokes = Array.isArray(data.strokes) ? data.strokes : [];
+          renderStudentVectorLayer();
+        }, err => {
+          console.warn('Student vector listener failed:', err);
+          showToast('Could not load saved handwriting. Editing is paused to protect existing work.', 'error');
+          if (isStudentVectorEditingContext()) setCanvasLoadReady(false);
+        });
+    }
+
+    function persistStudentVectorDrawings() {
+      if (!isStudentVectorEditingContext() || !db) return Promise.resolve();
+      const points = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
+      const bytes = new Blob([JSON.stringify(localStudentStrokes)]).size;
+      if (localStudentStrokes.length > STUDENT_VECTOR_MAX_STROKES || points > STUDENT_VECTOR_MAX_POINTS || bytes > 700 * 1024) {
+        showToast('Handwriting limit reached for this slide. Remove older strokes before continuing.', 'error');
+        return Promise.resolve();
+      }
+      const ref = studentVectorSlideRef(signedInUser.uid).collection('studentDrawings').doc('student');
+      const payload = { ownerUid: signedInUser.uid, format: 'normalized-v1',
+        strokes: localStudentStrokes.slice(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+      studentVectorSaveInFlight = studentVectorSaveInFlight.catch(() => {}).then(() => ref.set(payload, { merge: true }));
+      return studentVectorSaveInFlight;
+    }
+
+    function scheduleStudentVectorSave(force = false) {
+      if (!isStudentVectorEditingContext()) return;
+      studentVectorDirty = true;
+      if (studentVectorSaveTimer && !force) return;
+      if (studentVectorSaveTimer) clearTimeout(studentVectorSaveTimer);
+      const delay = force ? 0 : Math.max(0, STUDENT_VECTOR_WRITE_MS - (Date.now() - studentVectorLastWriteAt));
+      studentVectorSaveTimer = setTimeout(() => {
+        studentVectorSaveTimer = null; studentVectorLastWriteAt = Date.now(); studentVectorDirty = false;
+        persistStudentVectorDrawings().catch(err => {
+          studentVectorDirty = true; console.error('Student vector save failed:', err);
+          showToast('Handwriting could not be saved. Keep this page open and retry.', 'error');
+        });
+      }, delay);
+    }
+
+    async function flushStudentVectorSave() {
+      if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
+      if (!studentVectorDirty) return studentVectorSaveInFlight;
+      studentVectorDirty = false;
+      const task = studentVectorSaveInFlight.catch(() => {}).then(() => persistStudentVectorDrawings());
+      studentVectorSaveInFlight = task; await task; return task;
+    }
+
+    function handleStudentVectorPointerDown(e) {
+      if (!isStudentVectorEditingContext() || !canvasLoadReady || (isStylusOnlyMode && e.pointerType === 'touch')) return;
+      e.preventDefault();
+      const p = getCanvasCoordinates(e);
+      if (activeTool === 'text') {
+        const text = prompt('Enter text overlay:'); if (!text) return;
+        beginCanvasAction();
+        localStudentStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
+          x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
+          color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
+        renderStudentVectorLayer(); scheduleStudentVectorSave(true); return;
+      }
+      beginCanvasAction();
+      studentVectorActiveStroke = { type: 'path', coordinateSpace: 'normalized-v1', tool: activeTool,
+        color: currentColor,
+        width: (activeTool === 'eraser' ? Number(currentLineWidth) * 4 : Number(currentLineWidth)) / mainCanvas.width,
+        points: [{ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height }] };
+      localStudentStrokes.push(studentVectorActiveStroke);
+      studentVectorCanvas.setPointerCapture(e.pointerId); renderStudentVectorLayer();
+    }
+
+    function handleStudentVectorPointerMove(e) {
+      if (!studentVectorActiveStroke || !isStudentVectorEditingContext()) return;
+      if (isStylusOnlyMode && e.pointerType === 'touch') return;
+      e.preventDefault();
+      const rect = canvasWrapper.getBoundingClientRect();
+      const samples = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+      (samples.length ? samples : [e]).forEach(sample => {
+        const p = getCanvasCoordinates(sample, rect);
+        if (studentVectorActiveStroke.points.length < STUDENT_VECTOR_MAX_POINTS) {
+          studentVectorActiveStroke.points.push({ x: p.x / mainCanvas.width, y: p.y / mainCanvas.height });
+        }
+      });
+      renderStudentVectorLayer(); scheduleStudentVectorSave(false);
+    }
+
+    function handleStudentVectorPointerUp(e) {
+      if (!studentVectorActiveStroke) return;
+      studentVectorActiveStroke = null;
+      try { studentVectorCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      renderStudentVectorLayer(); scheduleStudentVectorSave(true);
+    }
+
     function annotationAuthorId() {
       // Teacher and peer-helper marks share one editable staff layer.
       // A teacher can therefore correct or erase a peer helper's annotation.
@@ -3099,7 +3291,10 @@ async function loadAssignmentProgressCounts(assignment) {
       canvasLoadReady = Boolean(ready);
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
         && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
-      if (mainCanvas) mainCanvas.style.pointerEvents = (canvasLoadReady && !requesterIsLocked && !isVectorAnnotationContext()) ? 'auto' : 'none';
+      if (mainCanvas) mainCanvas.style.pointerEvents =
+        (canvasLoadReady && !requesterIsLocked && !isVectorAnnotationContext() && !isStudentVectorEditingContext()) ? 'auto' : 'none';
+      if (studentVectorCanvas) studentVectorCanvas.style.pointerEvents =
+        (canvasLoadReady && isStudentVectorEditingContext()) ? 'auto' : 'none';
       if (annotationCanvas) annotationCanvas.style.pointerEvents = (canvasLoadReady && canDrawVectorAnnotations()) ? 'auto' : 'none';
       const helperSubmit = document.getElementById('submitPeerHelpBtn');
       const teacherSubmit = document.getElementById('teacherSubmitPeerHelpBtn');
@@ -3180,6 +3375,7 @@ async function loadAssignmentProgressCounts(assignment) {
       if (!currentAssignmentId) return;
       if (unsubSlideWork) { unsubSlideWork(); unsubSlideWork = null; }
       stopAnnotationListener();
+      stopStudentVectorListener();
       const loadToken = ++canvasLoadSequence;
       const assignmentId = currentAssignmentId;
       const slideIndex = currentSlideIndex;
@@ -3241,7 +3437,10 @@ async function loadAssignmentProgressCounts(assignment) {
       // Every student workspace subscribes to its own annotation collection,
       // including in-progress work, so teacher feedback appears immediately.
       // Firestore rules restrict student reads to their own work.
-      if (targetStudentId) startAnnotationListener(targetStudentId);
+      if (targetStudentId) {
+        startStudentVectorListener(targetStudentId);
+        startAnnotationListener(targetStudentId);
+      }
       if (!targetStudentId) {
         setCanvasLoadReady(true);
         return;
