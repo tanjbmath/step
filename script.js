@@ -1118,16 +1118,17 @@
       if (localStudentStrokes.length > STUDENT_VECTOR_MAX_STROKES || points > STUDENT_VECTOR_MAX_POINTS || bytes > 700 * 1024) {
         return Promise.reject(new Error('Handwriting limit reached for this slide. Remove older strokes before continuing.'));
       }
-      const ref = studentVectorSlideRef(signedInUser.uid).collection('studentDrawings').doc('student');
+      const slideRef = studentVectorSlideRef(signedInUser.uid);
+      const ref = slideRef.collection('studentDrawings').doc('student');
       const payload = { ownerUid: signedInUser.uid, format: 'normalized-v1',
         strokes: localStudentStrokes.slice(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
-      const markerKey = currentAssignmentId + ':' + signedInUser.uid;
+      const markerKey = [currentAssignmentId, signedInUser.uid, currentSlideIndex].join(':');
       studentVectorSaveInFlight = studentVectorSaveInFlight.catch(() => {}).then(async () => {
-        // Mark slide 0 on the student roster once per session so the teacher dashboard
-        // subscribes to vector previews only for students who actually have them.
-        if (currentSlideIndex === 0 && studentVectorPreviewMarkerKey !== markerKey) {
-          await db.collection('assignments').doc(currentAssignmentId).collection('students').doc(signedInUser.uid)
-            .set({ studentVectorSlide0: true }, { merge: true });
+        // Create the slide parent once so preview listeners and deletion routines can
+        // discover vector-only slides. Flush pending photo/raster work first.
+        if (studentVectorPreviewMarkerKey !== markerKey) {
+          await flushCanvasSaveToFirestore();
+          await slideRef.set({ studentDrawingFormat: 'normalized-v1' }, { merge: true });
           studentVectorPreviewMarkerKey = markerKey;
         }
         await ref.set(payload, { merge: true });
@@ -2628,17 +2629,6 @@ async function loadAssignmentProgressCounts(assignment) {
         const cachedPreviewSource = studentPreviewData.get(key);
         if (img && cachedPreviewSource && img.getAttribute('src') !== cachedPreviewSource) img.src = cachedPreviewSource;
         ensureStudentVectorPreviewCanvas(studentUid, key);
-        if (student.studentVectorSlide0 === true && !studentPreviewVectorUnsubscribers.has(key)) {
-          const vectorUnsubscribe = db.collection('assignments').doc(currentAssignmentId)
-            .collection('students').doc(studentUid).collection('slides').doc('slide_0')
-            .collection('studentDrawings').doc('student')
-            .onSnapshot(doc => {
-              const data = doc.exists ? (doc.data() || {}) : {};
-              studentPreviewVectorData.set(key, Array.isArray(data.strokes) ? data.strokes : []);
-              ensureStudentVectorPreviewCanvas(studentUid, key);
-            }, err => console.warn('Student vector preview listener:', err));
-          studentPreviewVectorUnsubscribers.set(key, vectorUnsubscribe);
-        }
         if (studentPreviewUnsubscribers.has(key)) return;
         const unsubscribe = db.collection('assignments').doc(currentAssignmentId)
           .collection('students').doc(studentUid).collection('slides').doc('slide_0')
@@ -2646,6 +2636,17 @@ async function loadAssignmentProgressCounts(assignment) {
             const version = (studentPreviewVersions.get(key) || 0) + 1;
             studentPreviewVersions.set(key, version);
             const slideData = slideDoc.exists ? (slideDoc.data() || {}) : {};
+            if (slideData.studentDrawingFormat === 'normalized-v1' && !studentPreviewVectorUnsubscribers.has(key)) {
+              const vectorUnsubscribe = db.collection('assignments').doc(currentAssignmentId)
+                .collection('students').doc(studentUid).collection('slides').doc('slide_0')
+                .collection('studentDrawings').doc('student')
+                .onSnapshot(doc => {
+                  const data = doc.exists ? (doc.data() || {}) : {};
+                  studentPreviewVectorData.set(key, Array.isArray(data.strokes) ? data.strokes : []);
+                  ensureStudentVectorPreviewCanvas(studentUid, key);
+                }, err => console.warn('Student vector preview listener:', err));
+              studentPreviewVectorUnsubscribers.set(key, vectorUnsubscribe);
+            }
             let previewSource = slideData.canvasData || null;
 
             // Submitted canvases move to Storage and canvasData is removed from Firestore.
