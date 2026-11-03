@@ -942,6 +942,7 @@
     let studentVectorSaveTimer = null;
     let studentVectorSaveInFlight = Promise.resolve();
     let studentVectorDirty = false;
+    let studentVectorLoading = false;
     let studentVectorLastWriteAt = 0;
     let studentVectorLoadKey = '';
     const STUDENT_VECTOR_WRITE_MS = 450;
@@ -1071,7 +1072,8 @@
     function stopStudentVectorListener() {
       if (unsubStudentVectors) { unsubStudentVectors(); unsubStudentVectors = null; }
       if (studentVectorSaveTimer) { clearTimeout(studentVectorSaveTimer); studentVectorSaveTimer = null; }
-      studentVectorDirty = false; localStudentStrokes = []; studentVectorActiveStroke = null; studentVectorLoadKey = '';
+      studentVectorDirty = false; studentVectorLoading = false;
+      localStudentStrokes = []; studentVectorActiveStroke = null; studentVectorLoadKey = '';
       if (studentVectorCtx && studentVectorCanvas) studentVectorCtx.clearRect(0, 0, studentVectorCanvas.width, studentVectorCanvas.height);
     }
 
@@ -1080,17 +1082,22 @@
       const key = [currentAssignmentId, targetUid, currentSlideIndex].join(':');
       if (studentVectorLoadKey === key) return;
       stopStudentVectorListener(); studentVectorLoadKey = key;
+      studentVectorLoading = true;
+      setCanvasLoadReady(canvasBaseLoadReady);
       ensureStudentVectorCanvas();
       unsubStudentVectors = studentVectorSlideRef(targetUid).collection('studentDrawings').doc('student')
         .onSnapshot(doc => {
           if (studentVectorActiveStroke || studentVectorDirty) return;
           const data = doc.exists ? (doc.data() || {}) : {};
           localStudentStrokes = Array.isArray(data.strokes) ? data.strokes : [];
+          studentVectorLoading = false;
           renderStudentVectorLayer();
+          setCanvasLoadReady(canvasBaseLoadReady);
         }, err => {
+          studentVectorLoading = false;
           console.warn('Student vector listener failed:', err);
           showToast('Could not load saved handwriting. Editing is paused to protect existing work.', 'error');
-          if (isStudentVectorEditingContext()) setCanvasLoadReady(false);
+          setCanvasLoadReady(false);
         });
     }
 
@@ -1248,7 +1255,9 @@
     }
     function annotationPayload() {
       return {
-        authorUid: annotationAuthorId(),
+        // The Firestore document ID is the shared "staff" layer; this field
+        // must remain the actual authenticated UID for the security rules.
+        authorUid: signedInUser?.uid || '',
         role: currentUserRole === 'teacher' ? 'teacher' : 'peer',
         strokes: localAnnotationStrokes.slice(-ANNOTATION_MAX_STROKES),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -3299,10 +3308,12 @@ async function loadAssignmentProgressCounts(assignment) {
     let currentBgImage = null;
     // A helper must not draw or submit until the source slide image is fully decoded.
     let canvasLoadReady = true;
+    let canvasBaseLoadReady = true;
     let canvasLoadSequence = 0;
 
     function setCanvasLoadReady(ready) {
-      canvasLoadReady = Boolean(ready);
+      canvasBaseLoadReady = Boolean(ready);
+      canvasLoadReady = canvasBaseLoadReady && !studentVectorLoading;
       const requesterIsLocked = requesterHelpLock && currentUserRole === 'student'
         && !inspectingStudentId && !['helper', 'teacher'].includes(activeHelpMode);
       if (mainCanvas) mainCanvas.style.pointerEvents =
@@ -4170,10 +4181,6 @@ async function loadAssignmentProgressCounts(assignment) {
       }
       if (mainCanvas) mainCanvas.style.pointerEvents =
         (requesterIsLocked || !canvasLoadReady || isVectorAnnotationContext() || isStudentVectorEditingContext()) ? 'none' : 'auto';
-      if (studentVectorCanvas) {
-        studentVectorCanvas.style.pointerEvents = (canvasLoadReady && isStudentVectorEditingContext()) ? 'auto' : 'none';
-        studentVectorCanvas.style.transform = mainCanvas.style.transform;
-      }
       if (studentVectorCanvas) {
         studentVectorCanvas.style.pointerEvents = (canvasLoadReady && isStudentVectorEditingContext()) ? 'auto' : 'none';
         studentVectorCanvas.style.transform = mainCanvas.style.transform;
