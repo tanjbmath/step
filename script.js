@@ -1006,6 +1006,7 @@
       return Boolean(currentUserRole === 'student' && !inspectingStudentId
         && currentSubmissionStatus === 'in-progress'
         && !['helper', 'teacher'].includes(activeHelpMode)
+        && !requesterHelpLock
         && signedInUser && studentId === signedInUser.uid && currentAssignmentId);
     }
 
