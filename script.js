@@ -1112,8 +1112,7 @@
       const points = localStudentStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
       const bytes = new Blob([JSON.stringify(localStudentStrokes)]).size;
       if (localStudentStrokes.length > STUDENT_VECTOR_MAX_STROKES || points > STUDENT_VECTOR_MAX_POINTS || bytes > 700 * 1024) {
-        showToast('Handwriting limit reached for this slide. Remove older strokes before continuing.', 'error');
-        return Promise.resolve();
+        throw new Error('Handwriting limit reached for this slide. Remove older strokes before continuing.');
       }
       const ref = studentVectorSlideRef(signedInUser.uid).collection('studentDrawings').doc('student');
       const payload = { ownerUid: signedInUser.uid, format: 'normalized-v1',
@@ -1158,7 +1157,7 @@
         localStudentStrokes.push({ type: 'text', coordinateSpace: 'normalized-v1', text,
           x: p.x / mainCanvas.width, y: p.y / mainCanvas.height,
           color: currentColor, width: Number(currentLineWidth) / mainCanvas.width });
-        renderStudentVectorLayer(); scheduleStudentVectorSave(true); return;
+        renderStudentVectorLayer(); scheduleStudentVectorSave(false); return;
       }
       if (localStudentStrokes.length >= STUDENT_VECTOR_MAX_STROKES) {
         showToast('This slide has reached its handwriting limit.', 'error'); return;
@@ -1194,7 +1193,7 @@
       if (!studentVectorActiveStroke) return;
       studentVectorActiveStroke = null;
       try { studentVectorCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
-      renderStudentVectorLayer(); scheduleStudentVectorSave(true);
+      renderStudentVectorLayer(); scheduleStudentVectorSave(false);
     }
 
     function annotationAuthorId() {
@@ -3723,6 +3722,11 @@ async function loadAssignmentProgressCounts(assignment) {
     function restoreCanvasState(state) {
       if (!state) return;
       const rasterState = state.kind === 'student-composite' ? state.raster : state;
+      let rasterChanged = true;
+      if (state.kind === 'student-composite') {
+        const currentRaster = ctx.getImageData(0, 0, mainCanvas.width, mainCanvas.height);
+        rasterChanged = currentRaster.data.some((value, index) => value !== rasterState.data[index]);
+      }
       if (rasterState.width !== mainCanvas.width || rasterState.height !== mainCanvas.height) {
         showToast('Undo history was reset because the canvas size changed.', 'info');
         undoStack = [];
@@ -3736,7 +3740,7 @@ async function loadAssignmentProgressCounts(assignment) {
         renderStudentVectorLayer();
         scheduleStudentVectorSave(true);
       }
-      saveCanvasToFirestore();
+      if (rasterChanged) saveCanvasToFirestore();
       updateHistoryButtons();
     }
 
