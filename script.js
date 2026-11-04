@@ -1017,6 +1017,8 @@
     let annotationActiveStroke = null;
     let annotationSaveTimer = null;
     let annotationSaveInFlight = Promise.resolve();
+    let annotationChangeVersion = 0;
+    let annotationSavedVersion = 0;
     let annotationLastWriteAt = 0;
     let annotationLoadKey = '';
     const ANNOTATION_LIVE_WRITE_MS = 450;
@@ -1587,16 +1589,21 @@
       if (localAnnotationStrokes.length > ANNOTATION_MAX_STROKES
           || totalPoints > ANNOTATION_MAX_POINTS
           || estimatedBytes > 700 * 1024) {
-        showToast('Annotation limit reached for this slide. Remove older strokes before continuing.', 'error');
-        return Promise.resolve();
+        const error = new Error('Annotation limit reached for this slide. Remove older strokes before continuing.');
+        showToast(error.message, 'error');
+        return Promise.reject(error);
       }
       const ref = annotationSlideRef().collection('annotations').doc(annotationAuthorId());
       const payload = annotationPayload();
-      annotationSaveInFlight = annotationSaveInFlight.catch(() => {}).then(() => ref.set(payload, { merge: true }));
+      const saveVersion = annotationChangeVersion;
+      annotationSaveInFlight = annotationSaveInFlight.catch(() => {})
+        .then(() => ref.set(payload, { merge: true }))
+        .then(() => { annotationSavedVersion = Math.max(annotationSavedVersion, saveVersion); });
       return annotationSaveInFlight;
     }
     function scheduleVectorAnnotationSave(force = false) {
       if (!canDrawVectorAnnotations()) return;
+      annotationChangeVersion++;
       if (annotationSaveTimer && !force) return;
       if (annotationSaveTimer) clearTimeout(annotationSaveTimer);
       const elapsed = Date.now() - annotationLastWriteAt;
@@ -1615,6 +1622,7 @@
       if (annotationSaveTimer) { clearTimeout(annotationSaveTimer); annotationSaveTimer = null; }
       annotationRecords = new Map(); localAnnotationStrokes = [];
       annotationUndo = []; annotationRedo = []; annotationActiveStroke = null;
+      annotationChangeVersion = 0; annotationSavedVersion = 0;
       annotationLoadKey = '';
       if (annotationCtx && annotationCanvas) annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
     }
@@ -3406,9 +3414,12 @@ async function loadAssignmentProgressCounts(assignment) {
 
     async function flushVectorAnnotationSave() {
       if (annotationSaveTimer) { clearTimeout(annotationSaveTimer); annotationSaveTimer = null; }
-      // Wait for any write already started by the live batching timer.
-      await annotationSaveInFlight;
-      if (canDrawVectorAnnotations()) await persistVectorAnnotations();
+      // Wait for any write already started by the live batching timer. If it failed,
+      // the version counters keep the layer dirty and this flush retries it.
+      await annotationSaveInFlight.catch(() => {});
+      if (canDrawVectorAnnotations() && annotationChangeVersion > annotationSavedVersion) {
+        await persistVectorAnnotations();
+      }
       await annotationSaveInFlight;
     }
 
