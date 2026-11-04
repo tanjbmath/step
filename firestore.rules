@@ -698,7 +698,8 @@ service cloud.firestore {
             allow create, update: if reviewId == 'combined'
               && ownsAssignment(assignmentId)
               && request.resource.data.keys().hasOnly([
-                'format', 'finalized', 'layers', 'layerCount', 'strokeCount', 'finalizedAt'
+                'format', 'finalized', 'layers', 'canvasStoragePath', 'updatedAt',
+                'layerCount', 'strokeCount', 'finalizedAt'
               ])
               && request.resource.data.format == 'normalized-v1'
               && request.resource.data.finalized == true
