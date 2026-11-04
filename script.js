@@ -3434,10 +3434,12 @@ async function loadAssignmentProgressCounts(assignment) {
 
       for (let slideIndex = 0; slideIndex < totalSlides; slideIndex++) {
         const slideRef = slidesRef.doc('slide_' + slideIndex);
-        const [studentDrawingDoc, annotationSnapshot] = await Promise.all([
+        const [slideDoc, studentDrawingDoc, annotationSnapshot] = await Promise.all([
+          slideRef.get(),
           slideRef.collection('studentDrawings').doc('student').get(),
           slideRef.collection('annotations').get()
         ]);
+        const slideData = slideDoc.exists ? (slideDoc.data() || {}) : {};
         const layers = {};
         if (studentDrawingDoc.exists) {
           const drawingData = studentDrawingDoc.data() || {};
@@ -3461,6 +3463,8 @@ async function loadAssignmentProgressCounts(assignment) {
           format: 'normalized-v1',
           finalized: true,
           layers,
+          canvasStoragePath: slideData.canvasStoragePath || null,
+          updatedAt: slideData.updatedAt || null,
           layerCount: Object.keys(layers).length,
           strokeCount: Object.values(layers).reduce((total, strokes) => total + strokes.length, 0),
           finalizedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -3928,31 +3932,42 @@ async function loadAssignmentProgressCounts(assignment) {
       if (isFinalizedStudentView) {
         // Completed work is immutable: use one-shot reads instead of maintaining live listeners.
         // The combined document includes the student's vectors and every author layer.
-        slideRef.get().then(slideDoc => {
-          if (!isTargetCurrent()) return;
-          finishLoad(slideDoc.exists ? (slideDoc.data() || {}) : null, isTargetCurrent);
-        }).catch(err => {
-          if (isTargetCurrent()) {
-            setCanvasLoadReady(false);
-            console.warn('Completed slide read failed:', err);
-            showToast('Could not load the completed canvas.', 'error');
-          }
-        });
-
         slideRef.collection('finalReview').doc('combined').get().then(finalDoc => {
           if (!isTargetCurrent()) return;
           if (finalDoc.exists && finalDoc.data()?.finalized === true) {
-            applyFinalReviewLayers(finalDoc.data()?.layers || {});
+            const finalData = finalDoc.data() || {};
+            applyFinalReviewLayers(finalData.layers || {});
+            // The final snapshot carries the archived image path and timestamp too, so a
+            // completed slide needs only this one Firestore document read.
+            finishLoad(finalData, isTargetCurrent);
           } else {
             // Backward compatibility for completed work marked before final snapshots existed.
             startStudentVectorListener(targetStudentId);
             startAnnotationListener(targetStudentId);
+            slideRef.get().then(slideDoc => {
+              if (isTargetCurrent()) finishLoad(slideDoc.exists ? (slideDoc.data() || {}) : null, isTargetCurrent);
+            }).catch(err => {
+              if (isTargetCurrent()) {
+                setCanvasLoadReady(false);
+                console.warn('Legacy completed slide read failed:', err);
+                showToast('Could not load the completed canvas.', 'error');
+              }
+            });
           }
         }).catch(err => {
           if (!isTargetCurrent()) return;
           console.warn('Final review snapshot unavailable; using legacy annotation layers:', err);
           startStudentVectorListener(targetStudentId);
           startAnnotationListener(targetStudentId);
+          slideRef.get().then(slideDoc => {
+            if (isTargetCurrent()) finishLoad(slideDoc.exists ? (slideDoc.data() || {}) : null, isTargetCurrent);
+          }).catch(slideErr => {
+            if (isTargetCurrent()) {
+              setCanvasLoadReady(false);
+              console.warn('Legacy completed slide read failed:', slideErr);
+              showToast('Could not load the completed canvas.', 'error');
+            }
+          });
         });
         return;
       }
