@@ -3924,6 +3924,11 @@ async function loadAssignmentProgressCounts(assignment) {
         setCanvasLoadReady(true);
         return;
       }
+      if (!db) {
+        redrawBackgroundAndCanvas();
+        setCanvasLoadReady(true);
+        return;
+      }
 
       const slideRef = db.collection('assignments').doc(assignmentId)
         .collection('students').doc(targetStudentId)
