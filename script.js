@@ -1559,14 +1559,17 @@
           layerCtx.save();
           layerCtx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
           layerCtx.strokeStyle = stroke.color || '#dc2626';
-          layerCtx.lineWidth = Math.max(1, Number(stroke.width || 4) * scaleSize);
+          layerCtx.lineWidth = Math.max(1, Number(stroke.width || (normalized ? 0.004 : 4)) * scaleSize);
           layerCtx.lineCap = 'round'; layerCtx.lineJoin = 'round';
-          layerCtx.beginPath(); layerCtx.moveTo(points[0].x, points[0].y);
-          if (points.length === 1) {
-            layerCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
-          } else {
-            for (let i = 1; i < points.length; i++) layerCtx.lineTo(points[i].x, points[i].y);
-          }
+          // Student-vector eraser compaction stores disconnected fragments in one stroke.
+          // Honour its break indices so finalisation never redraws erased sections.
+          const breaks = new Set(Array.isArray(stroke.breaks) ? stroke.breaks : []);
+          layerCtx.beginPath();
+          points.forEach((point, index) => {
+            if (index === 0 || breaks.has(index)) layerCtx.moveTo(point.x, point.y);
+            else layerCtx.lineTo(point.x, point.y);
+          });
+          if (points.length === 1) layerCtx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
           layerCtx.stroke(); layerCtx.restore();
         });
         annotationCtx.drawImage(layer, 0, 0);
