@@ -2996,9 +2996,11 @@ async function loadAssignmentProgressCounts(assignment) {
         if (!writes.length) throw new Error('Could not identify the student records to update.');
         await Promise.all(writes);
         showToast(status === 'completed' ? 'Assignment marked completed by teacher.' : 'Amendments requested. Student can continue editing.', 'success');
+        return true;
       } catch (err) {
         console.error('Could not update review status:', err);
         showToast('Could not update review status: ' + err.message, 'error');
+        return false;
       }
     }
 
@@ -3463,7 +3465,8 @@ async function loadAssignmentProgressCounts(assignment) {
         const finalizedLayers = await finalizeStudentReviewAnnotations(
           currentAssignmentId, record.studentUid || inspectingStudentId
         );
-        await setStudentReviewStatus(record, 'completed');
+        const statusSaved = await setStudentReviewStatus(record, 'completed');
+        if (!statusSaved) throw new Error('The review status could not be updated in Firestore.');
         currentSubmissionStatus = 'completed';
         stopAnnotationListener();
         stopStudentVectorListener();
@@ -3479,7 +3482,8 @@ async function loadAssignmentProgressCounts(assignment) {
     document.getElementById('teacherRequestAmendmentsBtn').addEventListener('click', async () => {
       const record = window.currentInspectedStudentRecord;
       if (!record) return;
-      await setStudentReviewStatus(record, 'in-progress');
+      const statusSaved = await setStudentReviewStatus(record, 'in-progress');
+      if (!statusSaved) return;
       currentSubmissionStatus = 'in-progress';
       document.getElementById('teacherReviewActions').classList.add('hidden');
       document.getElementById('workspaceSubtext').textContent = "Amendments requested • Teacher annotations live-sync to the student";
