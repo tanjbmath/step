@@ -2861,7 +2861,12 @@ async function loadAssignmentProgressCounts(assignment) {
         const inspect = card.querySelector('.inspect-student-btn');
         if (inspect) inspect.addEventListener('click', e => { e.stopPropagation(); openThisStudentWork(); });
         const completed = card.querySelector('.mark-completed-btn');
-        if (completed) completed.addEventListener('click', e => { e.stopPropagation(); setStudentReviewStatus(student, 'completed'); });
+        if (completed) completed.addEventListener('click', async e => {
+          e.stopPropagation();
+          completed.disabled = true;
+          try { await completeStudentReviewFromDashboard(student); }
+          finally { completed.disabled = false; }
+        });
         const amendments = card.querySelector('.amendments-btn');
         if (amendments) amendments.addEventListener('click', e => { e.stopPropagation(); setStudentReviewStatus(student, 'in-progress'); });
         const forceCompleted = card.querySelector('.force-completed-btn');
@@ -2869,7 +2874,7 @@ async function loadAssignmentProgressCounts(assignment) {
           e.stopPropagation();
           if (!window.confirm('Mark ' + displayName + '\'s assignment as Completed without student submission?')) return;
           forceCompleted.disabled = true;
-          try { await setStudentReviewStatus(student, 'completed'); }
+          try { await completeStudentReviewFromDashboard(student); }
           finally { forceCompleted.disabled = false; }
         });
         grid.appendChild(card);
@@ -3002,6 +3007,25 @@ async function loadAssignmentProgressCounts(assignment) {
         teacherStatsRefreshTimer = null;
         if (!panel.classList.contains('hidden')) loadTeacherStudentStats();
       }, 1500);
+    }
+
+    async function completeStudentReviewFromDashboard(student) {
+      const studentUid = student?.studentUid || student?.id;
+      if (!currentAssignmentId || !studentUid) {
+        showToast('Could not identify the student or assignment to complete.', 'error');
+        return false;
+      }
+      try {
+        await archiveStudentCanvasToStorage(currentAssignmentId, studentUid);
+        await finalizeStudentReviewAnnotations(currentAssignmentId, studentUid);
+        const saved = await setStudentReviewStatus(student, 'completed');
+        if (!saved) throw new Error('The review status could not be updated in Firestore.');
+        return true;
+      } catch (err) {
+        console.error('Dashboard completion finalisation failed:', err);
+        showToast('Could not finalise this student’s work: ' + (err?.message || 'Please retry.'), 'error');
+        return false;
+      }
     }
 
     async function setStudentReviewStatus(student, status) {
