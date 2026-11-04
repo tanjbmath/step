@@ -502,6 +502,23 @@
               if (err.code !== 'storage/object-not-found') throw err;
             }));
           }
+          // Firestore does not cascade-delete subcollections when a slide parent is removed.
+          // Explicitly remove the original vector layers and final review snapshot.
+          for (const collectionName of ['studentDrawings', 'annotations', 'finalReview']) {
+            const childSnapshot = await runClassDeleteStep(
+              'Firestore read: ' + slide.ref.path + '/' + collectionName,
+              () => slide.ref.collection(collectionName).get()
+            );
+            for (let i = 0; i < childSnapshot.docs.length; i += 400) {
+              const batch = db.batch();
+              const chunk = childSnapshot.docs.slice(i, i + 400);
+              chunk.forEach(doc => batch.delete(doc.ref));
+              await runClassDeleteStep(
+                'Firestore batch delete: ' + chunk.map(doc => doc.ref.path).join(', '),
+                () => batch.commit()
+              );
+            }
+          }
         }
         for (let i = 0; i < slides.docs.length; i += 400) {
           const batch = db.batch();
