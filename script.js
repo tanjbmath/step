@@ -3462,7 +3462,9 @@ async function loadAssignmentProgressCounts(assignment) {
     // isolated exactly as they are in the live annotation renderer.
     async function finalizeStudentReviewAnnotations(assignmentId, studentUid) {
       if (!db || !assignmentId || !studentUid) throw new Error('Cannot finalise annotations: missing assignment or student.');
-      await flushVectorAnnotationSave();
+      if (currentAssignmentId === assignmentId && inspectingStudentId === studentUid) {
+        await flushVectorAnnotationSave();
+      }
       const totalSlides = Math.max(1, currentAssignmentData?.slides?.length || 1);
       const slidesRef = db.collection('assignments').doc(assignmentId)
         .collection('students').doc(studentUid).collection('slides');
