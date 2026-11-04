@@ -3087,8 +3087,9 @@ async function loadAssignmentProgressCounts(assignment) {
       if (previousButton) previousButton.disabled = true;
       if (nextButton) nextButton.disabled = true;
       try {
-        // Finish any pending teacher annotation save before changing the student target.
+        // Finish pending raster and vector annotation writes before changing the student target.
         await flushCanvasSaveToFirestore();
+        await flushVectorAnnotationSave();
         openWorkspaceForInspection(targetId, target.name || target.studentEmail || 'Student',
           target.status || 'submitted', target);
       } catch (error) {
