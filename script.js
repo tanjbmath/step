@@ -3481,7 +3481,6 @@ async function loadAssignmentProgressCounts(assignment) {
         // Teacher annotations may have created a fresh Firestore canvas image after submission.
         // Archive that final reviewed version too, before marking the work completed.
         await flushCanvasSaveToFirestore();
-        await flushVectorAnnotationSave();
         await archiveStudentCanvasToStorage(currentAssignmentId, record.studentUid || inspectingStudentId);
         const finalizedLayers = await finalizeStudentReviewAnnotations(
           currentAssignmentId, record.studentUid || inspectingStudentId
