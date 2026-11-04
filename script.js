@@ -3625,6 +3625,7 @@ async function loadAssignmentProgressCounts(assignment) {
       try {
         await flushCanvasSaveToFirestore();
         await flushStudentVectorSave();
+        await flushVectorAnnotationSave();
       } catch (err) {
         showToast('Could not finish saving this slide. Stay on the page and retry.', 'error');
         return;
@@ -3690,6 +3691,7 @@ async function loadAssignmentProgressCounts(assignment) {
       if (currentSlideIndex > 0) {
         await flushCanvasSaveToFirestore();
         await flushStudentVectorSave();
+        await flushVectorAnnotationSave();
         currentSlideIndex--;
         setupSlideWorkspace();
       }
@@ -3700,6 +3702,7 @@ async function loadAssignmentProgressCounts(assignment) {
       if (currentSlideIndex < totalSlides - 1) {
         await flushCanvasSaveToFirestore();
         await flushStudentVectorSave();
+        await flushVectorAnnotationSave();
         currentSlideIndex++;
         setupSlideWorkspace();
       }
