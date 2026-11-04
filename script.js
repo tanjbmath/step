@@ -16,6 +16,9 @@
     let db = null;
     let auth = null;
     let storage = null;
+    // Small in-memory cache avoids re-downloading the same archived canvas while a teacher switches students.
+    const archivedCanvasImageCache = new Map();
+    const ARCHIVED_CANVAS_IMAGE_CACHE_LIMIT = 4;
     let isFirebaseReady = false;
     let signedInUser = null;
     // Canonical student name stored once per authenticated account.
@@ -3879,17 +3882,43 @@ async function loadAssignmentProgressCounts(assignment) {
           projectId: firebase.app().options.projectId || null,
           storageBucket: storage.app?.options?.storageBucket || null
         });
-        const url = await storage.ref(storagePath).getDownloadURL();
+        const version = slideData.updatedAt && typeof slideData.updatedAt.toMillis === 'function'
+          ? slideData.updatedAt.toMillis()
+          : (slideData.archivedAt && typeof slideData.archivedAt.toMillis === 'function'
+            ? slideData.archivedAt.toMillis() : 'unversioned');
+        const cacheKey = storagePath + '|' + version;
+        let imagePromise = archivedCanvasImageCache.get(cacheKey);
+        if (imagePromise) {
+          // Refresh LRU order when a recently used image is requested again.
+          archivedCanvasImageCache.delete(cacheKey);
+          archivedCanvasImageCache.set(cacheKey, imagePromise);
+        } else {
+          imagePromise = storage.ref(storagePath).getDownloadURL().then(url => new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error('Could not load the saved canvas image. Check Firebase Storage CORS configuration.'));
+            const separator = url.includes('?') ? '&' : '?';
+            img.src = url + separator + 'v=' + encodeURIComponent(version);
+          }));
+          archivedCanvasImageCache.set(cacheKey, imagePromise);
+          imagePromise.catch(() => {
+            if (archivedCanvasImageCache.get(cacheKey) === imagePromise) archivedCanvasImageCache.delete(cacheKey);
+          });
+          while (archivedCanvasImageCache.size > ARCHIVED_CANVAS_IMAGE_CACHE_LIMIT) {
+            archivedCanvasImageCache.delete(archivedCanvasImageCache.keys().next().value);
+          }
+        }
+        const img = await imagePromise;
         if (!isCurrent()) return false;
+        if (isDrawing) throw new Error('Canvas became active before its saved image finished loading.');
         console.info('Peer Help archived canvas Storage read authorised:', {
           storagePath, authUid,
           projectId: firebase.app().options.projectId || null,
           storageBucket: storage.app?.options?.storageBucket || null
         });
-        const separator = url.includes('?') ? '&' : '?';
-        const version = slideData.updatedAt && typeof slideData.updatedAt.toMillis === 'function'
-          ? slideData.updatedAt.toMillis() : Date.now();
-        return drawImageSource(url + separator + 'v=' + encodeURIComponent(version));
+        ctx.drawImage(img, 0, 0, mainCanvas.width, mainCanvas.height);
+        return true;
       }
       return true;
     }
