@@ -1671,6 +1671,16 @@
       renderAnnotationLayers(); scheduleVectorAnnotationSave(true);
     }
 
+    document.getElementById('toggleTeacherAssignmentsBtn').addEventListener('click', () => {
+      const panel = document.getElementById('teacherAssignmentsContent');
+      const button = document.getElementById('toggleTeacherAssignmentsBtn');
+      const chevron = document.getElementById('teacherAssignmentsChevron');
+      const isOpening = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !isOpening);
+      button.setAttribute('aria-expanded', String(isOpening));
+      chevron.classList.toggle('rotate-180', isOpening);
+    });
+
     document.getElementById('toggleTeacherStudentStatsBtn').addEventListener('click', () => {
       const panel = document.getElementById('teacherStudentStatsPanel');
       const button = document.getElementById('toggleTeacherStudentStatsBtn');
