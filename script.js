@@ -990,8 +990,8 @@
     let studentVectorLoadKey = '';
     let studentVectorMarkerKey = '';
     const STUDENT_VECTOR_WRITE_MS = 2000;
-    const STUDENT_VECTOR_MAX_STROKES = 300;
-    const STUDENT_VECTOR_MAX_POINTS = 10000;
+    const STUDENT_VECTOR_MAX_STROKES = 1000;
+    const STUDENT_VECTOR_MAX_POINTS = 30000;
     let unsubAnnotations = null;
     let annotationRecords = new Map();
     let localAnnotationStrokes = [];
@@ -1003,8 +1003,8 @@
     let annotationLastWriteAt = 0;
     let annotationLoadKey = '';
     const ANNOTATION_LIVE_WRITE_MS = 450;
-    const ANNOTATION_MAX_STROKES = 300;
-    const ANNOTATION_MAX_POINTS = 18000;
+    const ANNOTATION_MAX_STROKES = 1000;
+    const ANNOTATION_MAX_POINTS = 30000;
 
     function isVectorAnnotationContext() {
       return Boolean(inspectingStudentId && signedInUser
@@ -1559,7 +1559,7 @@
         // must remain the actual authenticated UID for the security rules.
         authorUid: signedInUser?.uid || '',
         role: currentUserRole === 'teacher' ? 'teacher' : 'peer',
-        strokes: localAnnotationStrokes.slice(-ANNOTATION_MAX_STROKES),
+        strokes: localAnnotationStrokes.slice(),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
     }
@@ -1635,6 +1635,9 @@
         openTextOverlayDialog('annotation', p.x, p.y);
         return;
       }
+      if (activeTool !== 'eraser' && localAnnotationStrokes.length >= ANNOTATION_MAX_STROKES) {
+        showToast('This slide has reached its annotation limit.', 'error'); return;
+      }
       copyAnnotationSnapshot();
       annotationActiveStroke = {
         type: 'path', coordinateSpace: 'normalized-v1', tool: activeTool, color: currentColor,
@@ -1654,7 +1657,8 @@
       (samples.length ? samples : [e]).forEach(sample => {
         const p = getCanvasCoordinates(sample);
         const pts = annotationActiveStroke.points;
-        if (pts.length < ANNOTATION_MAX_POINTS) pts.push({
+        const totalPoints = localAnnotationStrokes.reduce((n, stroke) => n + (stroke.points?.length || 0), 0);
+        if (totalPoints < ANNOTATION_MAX_POINTS) pts.push({
           x: p.x / mainCanvas.width, y: p.y / mainCanvas.height
         });
       });
@@ -4208,8 +4212,8 @@ async function loadAssignmentProgressCounts(assignment) {
         renderStudentVectorLayer();
         scheduleStudentVectorSave(false);
       } else if (target.mode === 'annotation') {
-        if (!canDrawVectorAnnotations()) {
-          showToast('Annotations are no longer editable in this view.', 'error');
+        if (!canDrawVectorAnnotations() || localAnnotationStrokes.length >= ANNOTATION_MAX_STROKES) {
+          showToast('This slide has reached its annotation limit or is no longer editable.', 'error');
           closeTextOverlayDialog();
           return;
         }
