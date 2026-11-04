@@ -1635,7 +1635,7 @@
         openTextOverlayDialog('annotation', p.x, p.y);
         return;
       }
-      if (activeTool !== 'eraser' && localAnnotationStrokes.length >= ANNOTATION_MAX_STROKES) {
+      if (localAnnotationStrokes.length >= ANNOTATION_MAX_STROKES) {
         showToast('This slide has reached its annotation limit.', 'error'); return;
       }
       copyAnnotationSnapshot();
