@@ -691,6 +691,21 @@ service cloud.firestore {
             allow delete: if request.auth != null && authorUid == 'staff'
               && (ownsAssignment(assignmentId) || isActivePeerHelper(assignmentId, studentUid));
           }
+          // Immutable combined review snapshot: students can read their own completed layer,
+          // while only the assignment owner (teacher) may create or replace it.
+          match /finalReview/{reviewId} {
+            allow read: if isOwner(studentUid) || ownsAssignment(assignmentId);
+            allow create, update: if reviewId == 'combined'
+              && ownsAssignment(assignmentId)
+              && request.resource.data.keys().hasOnly([
+                'format', 'finalized', 'layers', 'layerCount', 'strokeCount', 'finalizedAt'
+              ])
+              && request.resource.data.format == 'normalized-v1'
+              && request.resource.data.finalized == true
+              && request.resource.data.layers is map;
+            allow delete: if ownsAssignment(assignmentId);
+          }
+
           allow create, update: if (
               isOwner(studentUid)
               && isAssignmentMember(assignmentId, studentUid)
