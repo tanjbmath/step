@@ -654,7 +654,7 @@ service cloud.firestore {
               && request.resource.data.ownerUid == studentUid
               && request.resource.data.format == 'normalized-v1'
               && request.resource.data.strokes is list
-              && request.resource.data.strokes.size() <= 300;
+              && request.resource.data.strokes.size() <= 1000;
 
             function studentCanDeleteVector() {
               let studentPath = /databases/$(database)/documents/assignments/$(assignmentId)/students/$(studentUid);
@@ -683,7 +683,7 @@ service cloud.firestore {
               && request.resource.data.authorUid == request.auth.uid
               && request.resource.data.keys().hasOnly(['authorUid', 'role', 'strokes', 'updatedAt'])
               && request.resource.data.strokes is list
-              && request.resource.data.strokes.size() <= 300
+              && request.resource.data.strokes.size() <= 1000
               && (
                 (ownsAssignment(assignmentId) && request.resource.data.role == 'teacher')
                 || (isActivePeerHelper(assignmentId, studentUid) && request.resource.data.role == 'peer')
