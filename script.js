@@ -1011,7 +1011,7 @@
         && (currentUserRole === 'teacher' || activeHelpMode === 'helper' || activeHelpMode === 'teacher'));
     }
     function canDrawVectorAnnotations() {
-      return isVectorAnnotationContext() && canvasLoadReady && Boolean(currentAssignmentId);
+      return isVectorAnnotationContext() && currentSubmissionStatus !== 'completed' && canvasLoadReady && Boolean(currentAssignmentId);
     }
     function ensureAnnotationCanvas() {
       if (!annotationCanvas) {
@@ -3384,6 +3384,73 @@ async function loadAssignmentProgressCounts(assignment) {
       if (ask) ask.classList.toggle('hidden', !isStudent || currentSubmissionStatus !== 'in-progress');
     }
 
+
+    async function flushVectorAnnotationSave() {
+      if (annotationSaveTimer) { clearTimeout(annotationSaveTimer); annotationSaveTimer = null; }
+      // Wait for any write already started by the live batching timer.
+      await annotationSaveInFlight;
+      if (canDrawVectorAnnotations()) await persistVectorAnnotations();
+      await annotationSaveInFlight;
+    }
+
+    function applyFinalReviewLayers(layers) {
+      const safeLayers = layers && typeof layers === 'object' ? layers : {};
+      annotationRecords = new Map(Object.entries(safeLayers)
+        .filter(([, strokes]) => Array.isArray(strokes)));
+      localAnnotationStrokes = [];
+      ensureAnnotationCanvas();
+      renderAnnotationLayers();
+    }
+
+    // Freeze a read-optimised snapshot without deleting or modifying the editable source layers.
+    // Keep each author's strokes in a separate sub-layer inside one document so erasers remain
+    // isolated exactly as they are in the live annotation renderer.
+    async function finalizeStudentReviewAnnotations(assignmentId, studentUid) {
+      if (!db || !assignmentId || !studentUid) throw new Error('Cannot finalise annotations: missing assignment or student.');
+      await flushVectorAnnotationSave();
+      const totalSlides = Math.max(1, currentAssignmentData?.slides?.length || 1);
+      const slidesRef = db.collection('assignments').doc(assignmentId)
+        .collection('students').doc(studentUid).collection('slides');
+      const finalLayersBySlide = {};
+
+      for (let slideIndex = 0; slideIndex < totalSlides; slideIndex++) {
+        const slideRef = slidesRef.doc('slide_' + slideIndex);
+        const [studentDrawingDoc, annotationSnapshot] = await Promise.all([
+          slideRef.collection('studentDrawings').doc('student').get(),
+          slideRef.collection('annotations').get()
+        ]);
+        const layers = {};
+        if (studentDrawingDoc.exists) {
+          const drawingData = studentDrawingDoc.data() || {};
+          if (Array.isArray(drawingData.strokes) && drawingData.strokes.length) {
+            layers.studentDrawing = drawingData.strokes;
+          }
+        }
+        annotationSnapshot.docs.forEach(doc => {
+          const data = doc.data() || {};
+          if (Array.isArray(data.strokes) && data.strokes.length) layers[doc.id] = data.strokes;
+        });
+
+        const serialized = JSON.stringify(layers);
+        const bytes = new Blob([serialized]).size;
+        // Leave headroom below Firestore's 1 MiB document limit for metadata and encoding.
+        if (bytes > 850 * 1024) {
+          throw new Error('The combined annotations on slide ' + (slideIndex + 1)
+            + ' exceed the safe Firestore document size. The work was not marked completed.');
+        }
+        await slideRef.collection('finalReview').doc('combined').set({
+          format: 'normalized-v1',
+          finalized: true,
+          layers,
+          layerCount: Object.keys(layers).length,
+          strokeCount: Object.values(layers).reduce((total, strokes) => total + strokes.length, 0),
+          finalizedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        finalLayersBySlide[slideIndex] = layers;
+      }
+      return finalLayersBySlide;
+    }
+
     document.getElementById('teacherMarkCompletedBtn').addEventListener('click', async () => {
       const record = window.currentInspectedStudentRecord;
       if (!record) return;
@@ -3391,11 +3458,18 @@ async function loadAssignmentProgressCounts(assignment) {
         // Teacher annotations may have created a fresh Firestore canvas image after submission.
         // Archive that final reviewed version too, before marking the work completed.
         await flushCanvasSaveToFirestore();
+        await flushVectorAnnotationSave();
         await archiveStudentCanvasToStorage(currentAssignmentId, record.studentUid || inspectingStudentId);
+        const finalizedLayers = await finalizeStudentReviewAnnotations(
+          currentAssignmentId, record.studentUid || inspectingStudentId
+        );
         await setStudentReviewStatus(record, 'completed');
         currentSubmissionStatus = 'completed';
+        stopAnnotationListener();
+        stopStudentVectorListener();
+        applyFinalReviewLayers(finalizedLayers[currentSlideIndex] || {});
         document.getElementById('teacherReviewActions').classList.add('hidden');
-        document.getElementById('workspaceSubtext').textContent = "Completed • Teacher annotations remain visible to the student";
+        document.getElementById('workspaceSubtext').textContent = "Completed • Final annotations are saved as a read-only layer";
       } catch (err) {
         console.error('Could not archive reviewed canvas:', err);
         showToast('Could not archive the reviewed canvas. The work has not been marked completed.', 'error');
@@ -3760,8 +3834,15 @@ async function loadAssignmentProgressCounts(assignment) {
       const loadToken = ++canvasLoadSequence;
       const assignmentId = currentAssignmentId;
       const slideIndex = currentSlideIndex;
+      const targetStudentId = inspectingStudentId || studentId;
+      const isFinalizedStudentView = currentUserRole === 'student'
+        && !inspectingStudentId && currentSubmissionStatus === 'completed';
       setCanvasLoadReady(false);
       let snapshotLoadSequence = 0;
+      const isTargetCurrent = () => loadToken === canvasLoadSequence
+        && currentAssignmentId === assignmentId
+        && currentSlideIndex === slideIndex
+        && (inspectingStudentId || studentId) === targetStudentId;
       const finishLoad = (slideData, isCurrent) => {
         const snapshotToken = ++snapshotLoadSequence;
         const isLatest = () => loadToken === canvasLoadSequence
@@ -3800,7 +3881,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const requestId = activeHelpRequestId;
         unsubSlideWork = db.collection('assignments').doc(assignmentId)
           .collection('helpRequests').doc(requestId)
-          .collection('slides').doc(`slide_${slideIndex}`)
+          .collection('slides').doc('slide_' + slideIndex)
           .onSnapshot(doc => {
             if (isDrawing || activeHelpRequestId !== requestId) return;
             finishLoad(doc.exists ? (doc.data() || {}) : null, () =>
@@ -3814,33 +3895,62 @@ async function loadAssignmentProgressCounts(assignment) {
         return;
       }
 
-      const targetStudentId = inspectingStudentId || studentId;
-      // Every student workspace subscribes to its own annotation collection,
-      // including in-progress work, so teacher feedback appears immediately.
-      // Firestore rules restrict student reads to their own work.
-      if (targetStudentId) {
-        startStudentVectorListener(targetStudentId);
-        startAnnotationListener(targetStudentId);
-      }
       if (!targetStudentId) {
         setCanvasLoadReady(true);
         return;
       }
+
+      const slideRef = db.collection('assignments').doc(assignmentId)
+        .collection('students').doc(targetStudentId)
+        .collection('slides').doc('slide_' + slideIndex);
+
+      if (isFinalizedStudentView) {
+        // Completed work is immutable: use one-shot reads instead of maintaining live listeners.
+        // The combined document includes the student's vectors and every author layer.
+        slideRef.get().then(slideDoc => {
+          if (!isTargetCurrent()) return;
+          finishLoad(slideDoc.exists ? (slideDoc.data() || {}) : null, isTargetCurrent);
+        }).catch(err => {
+          if (isTargetCurrent()) {
+            setCanvasLoadReady(false);
+            console.warn('Completed slide read failed:', err);
+            showToast('Could not load the completed canvas.', 'error');
+          }
+        });
+
+        slideRef.collection('finalReview').doc('combined').get().then(finalDoc => {
+          if (!isTargetCurrent()) return;
+          if (finalDoc.exists && finalDoc.data()?.finalized === true) {
+            applyFinalReviewLayers(finalDoc.data()?.layers || {});
+          } else {
+            // Backward compatibility for completed work marked before final snapshots existed.
+            startStudentVectorListener(targetStudentId);
+            startAnnotationListener(targetStudentId);
+          }
+        }).catch(err => {
+          if (!isTargetCurrent()) return;
+          console.warn('Final review snapshot unavailable; using legacy annotation layers:', err);
+          startStudentVectorListener(targetStudentId);
+          startAnnotationListener(targetStudentId);
+        });
+        return;
+      }
+
+      // In-progress and submitted work keeps live synchronisation so feedback remains immediate.
+      startStudentVectorListener(targetStudentId);
+      startAnnotationListener(targetStudentId);
       if (db) {
-        unsubSlideWork = db.collection('assignments').doc(assignmentId)
-          .collection('students').doc(targetStudentId)
-          .collection('slides').doc(`slide_${slideIndex}`)
-          .onSnapshot(doc => {
-            if (isDrawing) return;
-            finishLoad(doc.exists ? (doc.data() || {}) : null, () =>
-              !isDrawing && currentAssignmentId === assignmentId
-              && currentSlideIndex === slideIndex
-              && (inspectingStudentId || studentId) === targetStudentId);
-          }, err => {
-            if (loadToken === canvasLoadSequence) setCanvasLoadReady(false);
-            console.warn("Slide listener notice:", err);
-            showToast('Could not load the saved canvas. Editing is paused to protect existing work.', 'error');
-          });
+        unsubSlideWork = slideRef.onSnapshot(doc => {
+          if (isDrawing) return;
+          finishLoad(doc.exists ? (doc.data() || {}) : null, () =>
+            !isDrawing && currentAssignmentId === assignmentId
+            && currentSlideIndex === slideIndex
+            && (inspectingStudentId || studentId) === targetStudentId);
+        }, err => {
+          if (loadToken === canvasLoadSequence) setCanvasLoadReady(false);
+          console.warn("Slide listener notice:", err);
+          showToast('Could not load the saved canvas. Editing is paused to protect existing work.', 'error');
+        });
       } else {
         redrawBackgroundAndCanvas();
         setCanvasLoadReady(true);
