@@ -4046,7 +4046,7 @@ async function loadAssignmentProgressCounts(assignment) {
         const assignmentId = currentAssignmentId;
         const slideIndex = currentSlideIndex;
         if (!assignmentId) return;
-        if (isVectorAnnotationContext()) { await persistVectorAnnotations(); return; }
+        if (isVectorAnnotationContext()) { await flushVectorAnnotationSave(); return; }
         if (!targetStudentId && !(activeHelpRequestId && ['helper', 'teacher'].includes(activeHelpMode))) return;
 
         const exportCanvas = document.createElement('canvas');
@@ -5619,7 +5619,7 @@ async function loadAssignmentProgressCounts(assignment) {
     async function saveActiveHelpCanvasNow() {
       if (!activeHelpRequestId || !['helper', 'teacher'].includes(activeHelpMode)) return;
       if (!canvasLoadReady) throw new Error('The original student canvas has not finished loading. Nothing was saved.');
-      if (isVectorAnnotationContext()) { await persistVectorAnnotations(); return; }
+      if (isVectorAnnotationContext()) { await flushVectorAnnotationSave(); return; }
       clearTimeout(saveTimeout);
       saveTimeout = null;
       // Cancel queued Firestore draft writes and wait for any write already in flight.
