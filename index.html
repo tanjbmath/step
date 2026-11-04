@@ -172,10 +172,15 @@
         </button>
       </div>
 
-      <div id="teacherAssignmentsPanel" class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-4">
-        <div><h3 class="text-lg font-bold text-slate-800">My Assignments</h3><p class="text-sm text-slate-500">Select an assignment to monitor work and review submissions.</p></div>
-        <div id="teacherAssignmentsList" class="space-y-2 overflow-x-auto"><p class="text-sm text-slate-400">Loading assignments...</p></div>
-      </div>
+      <section id="teacherAssignmentsPanel" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <button id="toggleTeacherAssignmentsBtn" type="button" aria-expanded="true" aria-controls="teacherAssignmentsContent" class="w-full p-5 flex items-center justify-between gap-3 text-left hover:bg-slate-50 transition">
+          <span><span class="block text-lg font-bold text-slate-800">My Assignments</span><span class="block text-sm text-slate-500 mt-1">Select an assignment to monitor work and review submissions.</span></span>
+          <i id="teacherAssignmentsChevron" class="fa-solid fa-chevron-down text-slate-500 transition-transform rotate-180"></i>
+        </button>
+        <div id="teacherAssignmentsContent" class="px-6 pb-6 space-y-4">
+          <div id="teacherAssignmentsList" class="space-y-2 overflow-x-auto"><p class="text-sm text-slate-400">Loading assignments...</p></div>
+        </div>
+      </section>
       <section id="teacherStudentStatsSection" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <button id="toggleTeacherStudentStatsBtn" type="button" aria-expanded="false" aria-controls="teacherStudentStatsPanel" class="w-full p-5 flex items-center justify-between gap-3 text-left hover:bg-slate-50 transition">
           <span><span class="block font-bold text-slate-800">Student Progress Overview</span><span class="block text-sm text-slate-500 mt-1">Show or hide student totals and follow-up remarks.</span></span>
